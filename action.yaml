@@ -1,0 +1,11 @@
+name: test-summary
+description: Generates a GitHub Actions Job Summary from various unit testing reports
+inputs:
+  tap-paths:
+    description: glob matching TAP files
+runs:
+  using: node16
+  main: ./dist/index.js
+branding:
+  icon: thermometer
+  color: blue

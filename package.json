@@ -1,0 +1,19 @@
+{
+  "name": "test-summary",
+  "version": "0.1.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build ./lib/index.ts -o ./dist"
+  },
+  "dependencies": {
+    "@actions/core": "^1.9.0",
+    "@actions/github": "^5.0.3",
+    "tap-parser": "^11.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.43",
+    "@vercel/ncc": "^0.34.0",
+    "typescript": "~4.5"
+  }
+}
