@@ -7,6 +7,16 @@ function assertNever(value: never, message: string): never {
   throw new Error(`${message}: ${value}`)
 }
 
+function stripPrefixes(str: string): string {
+  if (str.startsWith('● ') || str.startsWith('- ')) {
+    return str.substring(2)
+  } else if (str.startsWith('#')) {
+    return str.substring(1)
+  } else {
+    return str
+  }
+}
+
 async function main() {
   const tapPaths = core.getInput('tap-paths')
 
@@ -33,13 +43,15 @@ async function main() {
     switch (tapEvent[0]) {
       case 'assert':
         let extra = ''
-        while (tapEvents[i + 1][0] === 'extra') {
-          extra += tapEvents[i + 1][1]
+        while (tapEvents[i + 1][0] === 'extra' || tapEvents[i + 1][0] === 'comment') {
+          extra += stripPrefixes(tapEvents[i + 1][1] as string)
           ++i
         }
         if (!tapEvent[1].ok) {
-          core.summary.addHeading(`❌ ${tapEvent[1].name}`, 4)
-          core.summary.addCodeBlock(extra)
+          core.summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
+          if (extra) {
+            core.summary.addCodeBlock(extra)
+          }
         }
         break
       case 'extra':
