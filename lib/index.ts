@@ -17,6 +17,53 @@ function stripPrefixes(str: string): string {
   }
 }
 
+function leadingWhitepsace(str: string): number {
+  for (let i = 0; i < str.length; ++i) {
+    if (str[i] !== ' ') {
+      return i
+    }
+  }
+  // the string was all whitespace, so indicate it is infinite whitespace
+  return Number.MAX_SAFE_INTEGER
+}
+
+function removeLeadingWhitespace(str: string): string {
+  const lines = str.split('\n')
+  let leading = Math.min(...lines.map(leadingWhitepsace))
+  if (leading === 0) {
+    return str
+  }
+  return lines.map((l) => l.substring(leading)).join('\n')
+}
+
+class Summary {
+  #buffer = ''
+
+  public addHeading(text: string, level = 1): this {
+    this.#buffer += '#'.repeat(level) + ' ' + text + '\n'
+    return this
+  }
+
+  public addCodeBlock(text: string): this {
+    this.#buffer += '```\n'
+    this.#buffer += text + '\n'
+    this.#buffer += '```\n\n'
+    return this
+  }
+
+  async write(): Promise<void> {
+    const filePath = process.env['GITHUB_STEP_SUMMARY']
+    if (!filePath) {
+      throw new Error(
+        `Unable to find environment variable for GITHUB_STEP_SUMMARY. Check if your runtime environment supports job summaries.`,
+      )
+    }
+    await fs.writeFile(filePath, this.#buffer, { encoding: 'utf8' })
+  }
+}
+
+const summary = new Summary()
+
 async function main() {
   const tapPaths = core.getInput('tap-paths')
 
@@ -29,7 +76,7 @@ async function main() {
     switch (tapEvent[0]) {
       case 'complete':
         ok = tapEvent[1].ok
-        core.summary.addHeading(
+        summary.addHeading(
           `${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${tapEvent[1].fail} failed.`,
         )
         break
@@ -44,13 +91,13 @@ async function main() {
       case 'assert':
         let extra = ''
         while (tapEvents[i + 1][0] === 'extra' || tapEvents[i + 1][0] === 'comment') {
-          extra += stripPrefixes(tapEvents[i + 1][1] as string)
+          extra += stripPrefixes(String(tapEvents[i + 1][1]).trim()) + '\n'
           ++i
         }
         if (!tapEvent[1].ok) {
-          core.summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
+          summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
           if (extra) {
-            core.summary.addCodeBlock(extra)
+            summary.addCodeBlock(removeLeadingWhitespace(extra).trim())
           }
         }
         break
@@ -64,7 +111,7 @@ async function main() {
     }
   }
 
-  await core.summary.write()
+  await summary.write()
 
   // const payload = JSON.stringify(github.context.payload, undefined, 2)
   // console.log(`The event payload: ${payload}`)

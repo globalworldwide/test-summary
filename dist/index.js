@@ -4259,9 +4259,21 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var _Summary_buffer;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(2186));
 // import * as github from '@actions/github'
@@ -4281,6 +4293,47 @@ function stripPrefixes(str) {
         return str;
     }
 }
+function leadingWhitepsace(str) {
+    for (let i = 0; i < str.length; ++i) {
+        if (str[i] !== ' ') {
+            return i;
+        }
+    }
+    // the string was all whitespace, so indicate it is infinite whitespace
+    return Number.MAX_SAFE_INTEGER;
+}
+function removeLeadingWhitespace(str) {
+    const lines = str.split('\n');
+    let leading = Math.min(...lines.map(leadingWhitepsace));
+    if (leading === 0) {
+        return str;
+    }
+    return lines.map((l) => l.substring(leading)).join('\n');
+}
+class Summary {
+    constructor() {
+        _Summary_buffer.set(this, '');
+    }
+    addHeading(text, level = 1) {
+        __classPrivateFieldSet(this, _Summary_buffer, __classPrivateFieldGet(this, _Summary_buffer, "f") + ('#'.repeat(level) + ' ' + text + '\n'), "f");
+        return this;
+    }
+    addCodeBlock(text) {
+        __classPrivateFieldSet(this, _Summary_buffer, __classPrivateFieldGet(this, _Summary_buffer, "f") + '```\n', "f");
+        __classPrivateFieldSet(this, _Summary_buffer, __classPrivateFieldGet(this, _Summary_buffer, "f") + (text + '\n'), "f");
+        __classPrivateFieldSet(this, _Summary_buffer, __classPrivateFieldGet(this, _Summary_buffer, "f") + '```\n\n', "f");
+        return this;
+    }
+    async write() {
+        const filePath = process.env['GITHUB_STEP_SUMMARY'];
+        if (!filePath) {
+            throw new Error(`Unable to find environment variable for GITHUB_STEP_SUMMARY. Check if your runtime environment supports job summaries.`);
+        }
+        await fs.writeFile(filePath, __classPrivateFieldGet(this, _Summary_buffer, "f"), { encoding: 'utf8' });
+    }
+}
+_Summary_buffer = new WeakMap();
+const summary = new Summary();
 async function main() {
     const tapPaths = core.getInput('tap-paths');
     // MSED - consider using @actions/glob to convert tapPaths wildcards to useful information
@@ -4291,7 +4344,7 @@ async function main() {
         switch (tapEvent[0]) {
             case 'complete':
                 ok = tapEvent[1].ok;
-                core.summary.addHeading(`${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${tapEvent[1].fail} failed.`);
+                summary.addHeading(`${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${tapEvent[1].fail} failed.`);
                 break;
             default:
                 break;
@@ -4303,13 +4356,13 @@ async function main() {
             case 'assert':
                 let extra = '';
                 while (tapEvents[i + 1][0] === 'extra' || tapEvents[i + 1][0] === 'comment') {
-                    extra += stripPrefixes(tapEvents[i + 1][1]);
+                    extra += stripPrefixes(String(tapEvents[i + 1][1]).trim()) + '\n';
                     ++i;
                 }
                 if (!tapEvent[1].ok) {
-                    core.summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4);
+                    summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4);
                     if (extra) {
-                        core.summary.addCodeBlock(extra);
+                        summary.addCodeBlock(removeLeadingWhitespace(extra).trim());
                     }
                 }
                 break;
@@ -4322,7 +4375,7 @@ async function main() {
                 assertNever(tapEvent[0], `Unknown tap event`);
         }
     }
-    await core.summary.write();
+    await summary.write();
     // const payload = JSON.stringify(github.context.payload, undefined, 2)
     // console.log(`The event payload: ${payload}`)
     if (!ok) {
