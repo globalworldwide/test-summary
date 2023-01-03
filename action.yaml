@@ -1,6 +1,9 @@
 name: test-summary
 description: Generates a GitHub Actions Job Summary from various unit testing reports
 inputs:
+  title:
+    required: false
+    description: title for test results in summary
   tap-paths:
     description: glob matching TAP files
 runs:
