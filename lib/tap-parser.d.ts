@@ -1,11 +1,20 @@
 declare module 'tap-parser' {
+  type Diagnosis = {
+    errors?: {
+      errMsg?: string
+    }[]
+    severity: string
+  }
+
   type Result = {
     ok: boolean
     id: number
     name: string
     fullname: string
+    diag?: Diagnosis
   }
 
+  type Version = ['version', number]
   type Assert = ['assert', Result]
   type Extra = ['extra', string]
   type Comment = ['comment', string]
@@ -32,7 +41,7 @@ declare module 'tap-parser' {
     },
   ]
 
-  type Events = Assert | Comment | Extra | Plan | Complete
+  type Events = Version | Assert | Comment | Extra | Plan | Complete
 
   class Parser {
     static parse(data: string): Events[]

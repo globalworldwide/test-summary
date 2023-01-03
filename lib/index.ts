@@ -65,6 +65,8 @@ class Summary {
 const summary = new Summary()
 
 async function main() {
+  let version = 12
+  const title = core.getInput('title')
   const tapPaths = core.getInput('tap-paths')
 
   // MSED - consider using @actions/glob to convert tapPaths wildcards to useful information
@@ -77,8 +79,13 @@ async function main() {
       case 'complete':
         ok = tapEvent[1].ok
         summary.addHeading(
-          `${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${tapEvent[1].fail} failed.`,
+          `${title ? `${title}: ` : ''}${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${
+            tapEvent[1].fail
+          } failed.`,
         )
+        break
+      case 'version':
+        version = tapEvent[1]
         break
       default:
         break
@@ -90,17 +97,26 @@ async function main() {
     switch (tapEvent[0]) {
       case 'assert':
         let extra = ''
-        while (tapEvents[i + 1][0] === 'extra' || tapEvents[i + 1][0] === 'comment') {
-          extra += stripPrefixes(String(tapEvents[i + 1][1]).trim()) + '\n'
-          ++i
+        if (version === 12) {
+          while (tapEvents[i + 1][0] === 'extra' || tapEvents[i + 1][0] === 'comment') {
+            extra += stripPrefixes(String(tapEvents[i + 1][1]).trim()) + '\n'
+            ++i
+          }
         }
         if (!tapEvent[1].ok) {
           summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
+          if (version === 13) {
+            for (const err of tapEvent[1].diag?.errors ?? []) {
+              if (err.errMsg) extra += stripPrefixes(err.errMsg.trim()) + '\n'
+            }
+          }
+
           if (extra) {
             summary.addCodeBlock(removeLeadingWhitespace(extra).trim())
           }
         }
         break
+      case 'version':
       case 'extra':
       case 'comment':
       case 'plan':
