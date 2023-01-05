@@ -66,8 +66,13 @@ class Summary {
 
     const buffer = Buffer.from(this.#buffer, 'utf8')
     if (buffer.length > maxLength) {
-      await fs.writeFile(filePath, buffer.subarray(0, maxLength - 512))
-      await fs.writeFile(filePath, '\n\n\n...summary truncated...', 'utf8')
+      await fs.writeFile(
+        filePath,
+        Buffer.concat([
+          buffer.subarray(0, maxLength - 512),
+          Buffer.from('\n\n\n...summary truncated...', 'utf8'),
+        ]),
+      )
     } else {
       await fs.writeFile(filePath, buffer)
     }
