@@ -41,6 +41,7 @@ class Summary {
 
   public addHeading(text: string, level = 1): this {
     this.#buffer += '#'.repeat(level) + ' ' + text + '\n'
+    core.info(text)
     return this
   }
 
@@ -118,7 +119,9 @@ async function main() {
           summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
           if (version === 13) {
             for (const err of tapEvent[1].diag?.errors ?? []) {
-              if (err.errMsg) extra += stripPrefixes(err.errMsg.trim()) + '\n'
+              if (err.errMsg) {
+                extra += stripPrefixes(err.errMsg.trim()) + '\n'
+              }
             }
           }
 

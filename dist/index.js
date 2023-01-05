@@ -4316,6 +4316,7 @@ class Summary {
     }
     addHeading(text, level = 1) {
         __classPrivateFieldSet(this, _Summary_buffer, __classPrivateFieldGet(this, _Summary_buffer, "f") + ('#'.repeat(level) + ' ' + text + '\n'), "f");
+        core.info(text);
         return this;
     }
     addCodeBlock(text) {
@@ -4380,8 +4381,9 @@ async function main() {
                     summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4);
                     if (version === 13) {
                         for (const err of tapEvent[1].diag?.errors ?? []) {
-                            if (err.errMsg)
+                            if (err.errMsg) {
                                 extra += stripPrefixes(err.errMsg.trim()) + '\n';
+                            }
                         }
                     }
                     if (extra) {
