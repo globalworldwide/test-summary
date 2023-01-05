@@ -4329,7 +4329,17 @@ class Summary {
         if (!filePath) {
             throw new Error(`Unable to find environment variable for GITHUB_STEP_SUMMARY. Check if your runtime environment supports job summaries.`);
         }
-        await fs.writeFile(filePath, __classPrivateFieldGet(this, _Summary_buffer, "f"), { encoding: 'utf8' });
+        // avoid $GITHUB_STEP_SUMMARY upload aborted, supports content up to a size of 1024k, got 1051k.
+        // For more information see: https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-markdown-summary
+        const maxLength = 1024 * 1024;
+        const buffer = Buffer.from(__classPrivateFieldGet(this, _Summary_buffer, "f"), 'utf8');
+        if (buffer.length > maxLength) {
+            await fs.writeFile(filePath, buffer.subarray(0, maxLength - 512));
+            await fs.writeFile(filePath, '\n\n\n...summary truncated...', 'utf8');
+        }
+        else {
+            await fs.writeFile(filePath, buffer);
+        }
     }
 }
 _Summary_buffer = new WeakMap();
