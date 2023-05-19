@@ -1,11 +1,7 @@
 import * as core from '@actions/core'
 // import * as github from '@actions/github'
 import * as fs from 'fs/promises'
-import tapParser from 'tap-parser'
-
-function assertNever(value: never, message: string): never {
-  throw new Error(`${message}: ${value}`)
-}
+import { Parser as TapParser } from 'tap-parser'
 
 function stripPrefixes(str: string): string {
   if (str.startsWith('● ') || str.startsWith('- ')) {
@@ -88,7 +84,7 @@ async function main() {
 
   // MSED - consider using @actions/glob to convert tapPaths wildcards to useful information
   const tapData = await fs.readFile(tapPaths, { encoding: 'utf8' })
-  const tapEvents = tapParser.parse(tapData)
+  const tapEvents = TapParser.parse(tapData)
 
   let ok = false
   for (const tapEvent of tapEvents) {
@@ -123,6 +119,12 @@ async function main() {
         if (!tapEvent[1].ok) {
           summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
           if (version === 13) {
+            if (tapEvent[1].diag?.message) {
+              extra += stripPrefixes(tapEvent[1].diag.message.trim()) + '\n'
+            }
+            if (tapEvent[1].diag?.stack) {
+              extra += stripPrefixes(tapEvent[1].diag.stack.trim()) + '\n'
+            }
             for (const err of tapEvent[1].diag?.errors ?? []) {
               if (err.errMsg) {
                 extra += stripPrefixes(err.errMsg.trim()) + '\n'
@@ -140,9 +142,11 @@ async function main() {
       case 'comment':
       case 'plan':
       case 'complete':
+      case 'close':
+      case 'finish':
         break
       default:
-        assertNever(tapEvent[0], `Unknown tap event`)
+        throw new Error(`${tapEvent[0]}: Unknown tap event`)
     }
   }
 

@@ -169,13 +169,9 @@ function exportVariable(name, val) {
     process.env[name] = convertedVal;
     const filePath = process.env['GITHUB_ENV'] || '';
     if (filePath) {
-        const delimiter = '_GitHubActionsFileCommandDelimeter_';
-        const commandValue = `${name}<<${delimiter}${os.EOL}${convertedVal}${os.EOL}${delimiter}`;
-        file_command_1.issueCommand('ENV', commandValue);
+        return file_command_1.issueFileCommand('ENV', file_command_1.prepareKeyValueMessage(name, val));
     }
-    else {
-        command_1.issueCommand('set-env', { name }, convertedVal);
-    }
+    command_1.issueCommand('set-env', { name }, convertedVal);
 }
 exports.exportVariable = exportVariable;
 /**
@@ -193,7 +189,7 @@ exports.setSecret = setSecret;
 function addPath(inputPath) {
     const filePath = process.env['GITHUB_PATH'] || '';
     if (filePath) {
-        file_command_1.issueCommand('PATH', inputPath);
+        file_command_1.issueFileCommand('PATH', inputPath);
     }
     else {
         command_1.issueCommand('add-path', {}, inputPath);
@@ -233,7 +229,10 @@ function getMultilineInput(name, options) {
     const inputs = getInput(name, options)
         .split('\n')
         .filter(x => x !== '');
-    return inputs;
+    if (options && options.trimWhitespace === false) {
+        return inputs;
+    }
+    return inputs.map(input => input.trim());
 }
 exports.getMultilineInput = getMultilineInput;
 /**
@@ -266,8 +265,12 @@ exports.getBooleanInput = getBooleanInput;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function setOutput(name, value) {
+    const filePath = process.env['GITHUB_OUTPUT'] || '';
+    if (filePath) {
+        return file_command_1.issueFileCommand('OUTPUT', file_command_1.prepareKeyValueMessage(name, value));
+    }
     process.stdout.write(os.EOL);
-    command_1.issueCommand('set-output', { name }, value);
+    command_1.issueCommand('set-output', { name }, utils_1.toCommandValue(value));
 }
 exports.setOutput = setOutput;
 /**
@@ -396,7 +399,11 @@ exports.group = group;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function saveState(name, value) {
-    command_1.issueCommand('save-state', { name }, value);
+    const filePath = process.env['GITHUB_STATE'] || '';
+    if (filePath) {
+        return file_command_1.issueFileCommand('STATE', file_command_1.prepareKeyValueMessage(name, value));
+    }
+    command_1.issueCommand('save-state', { name }, utils_1.toCommandValue(value));
 }
 exports.saveState = saveState;
 /**
@@ -462,13 +469,14 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.issueCommand = void 0;
+exports.prepareKeyValueMessage = exports.issueFileCommand = void 0;
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const fs = __importStar(__nccwpck_require__(7147));
 const os = __importStar(__nccwpck_require__(2037));
+const uuid_1 = __nccwpck_require__(5840);
 const utils_1 = __nccwpck_require__(5278);
-function issueCommand(command, message) {
+function issueFileCommand(command, message) {
     const filePath = process.env[`GITHUB_${command}`];
     if (!filePath) {
         throw new Error(`Unable to find environment variable for file command ${command}`);
@@ -480,7 +488,22 @@ function issueCommand(command, message) {
         encoding: 'utf8'
     });
 }
-exports.issueCommand = issueCommand;
+exports.issueFileCommand = issueFileCommand;
+function prepareKeyValueMessage(key, value) {
+    const delimiter = `ghadelimiter_${uuid_1.v4()}`;
+    const convertedValue = utils_1.toCommandValue(value);
+    // These should realistically never happen, but just in case someone finds a
+    // way to exploit uuid generation let's not allow keys or values that contain
+    // the delimiter.
+    if (key.includes(delimiter)) {
+        throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
+    }
+    if (convertedValue.includes(delimiter)) {
+        throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
+    }
+    return `${key}<<${delimiter}${os.EOL}${convertedValue}${os.EOL}${delimiter}`;
+}
+exports.prepareKeyValueMessage = prepareKeyValueMessage;
 //# sourceMappingURL=file-command.js.map
 
 /***/ }),
@@ -1739,40 +1762,35 @@ exports.checkBypass = checkBypass;
 
 /***/ }),
 
-/***/ 711:
+/***/ 7315:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { EventEmitter } = __nccwpck_require__(2361)
 
 module.exports = eventsToArray
 
-var EE = (__nccwpck_require__(2361).EventEmitter)
-function eventsToArray (ee, ignore, map) {
-  ignore = ignore || []
-  map = map || function (x) { return x }
-  var array = []
+function eventsToArray (ee, ignore = [], map = x => x) {
+  const array = []
 
-  ee.emit = (function (orig) {
-    return function etoaWrap (ev) {
-      if (ignore.indexOf(ev) === -1) {
-        var l = arguments.length
-        var args = new Array(l)
-        // intentionally sparse array
-        var swap = []
-        for (var i = 0; i < l; i++) {
-          var arg = arguments[i]
-          args[i] = arguments[i]
-          if (arg instanceof EE)
-            swap[i] = eventsToArray(arg, ignore, map)
+  const orig = ee.emit
+  ee.emit = function (...args) {
+    if (!ignore.includes(args[0])) {
+      args = args.map((arg, i, arr) => {
+        if (arg instanceof EventEmitter) {
+          return eventsToArray(arg, ignore, map)
         }
-        args = args.map(map)
-        args = args.map(function (arg, index) {
-          return swap[index] || arg
-        })
-        array.push(args)
-      }
 
-      return orig.apply(this, arguments)
+        return map(arg, i, arr)
+      })
+
+      array.push(args)
     }
-  })(ee.emit)
+
+    return orig.apply(this, args)
+  }
 
   return array
 }
@@ -1780,1873 +1798,7 @@ function eventsToArray (ee, ignore, map) {
 
 /***/ }),
 
-/***/ 1077:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-const proc = typeof process === 'object' && process ? process : {
-  stdout: null,
-  stderr: null,
-}
-const EE = __nccwpck_require__(2361)
-const Stream = __nccwpck_require__(2781)
-const SD = (__nccwpck_require__(1576).StringDecoder)
-
-const EOF = Symbol('EOF')
-const MAYBE_EMIT_END = Symbol('maybeEmitEnd')
-const EMITTED_END = Symbol('emittedEnd')
-const EMITTING_END = Symbol('emittingEnd')
-const EMITTED_ERROR = Symbol('emittedError')
-const CLOSED = Symbol('closed')
-const READ = Symbol('read')
-const FLUSH = Symbol('flush')
-const FLUSHCHUNK = Symbol('flushChunk')
-const ENCODING = Symbol('encoding')
-const DECODER = Symbol('decoder')
-const FLOWING = Symbol('flowing')
-const PAUSED = Symbol('paused')
-const RESUME = Symbol('resume')
-const BUFFERLENGTH = Symbol('bufferLength')
-const BUFFERPUSH = Symbol('bufferPush')
-const BUFFERSHIFT = Symbol('bufferShift')
-const OBJECTMODE = Symbol('objectMode')
-const DESTROYED = Symbol('destroyed')
-const EMITDATA = Symbol('emitData')
-const EMITEND = Symbol('emitEnd')
-const EMITEND2 = Symbol('emitEnd2')
-const ASYNC = Symbol('async')
-
-const defer = fn => Promise.resolve().then(fn)
-
-// TODO remove when Node v8 support drops
-const doIter = global._MP_NO_ITERATOR_SYMBOLS_  !== '1'
-const ASYNCITERATOR = doIter && Symbol.asyncIterator
-  || Symbol('asyncIterator not implemented')
-const ITERATOR = doIter && Symbol.iterator
-  || Symbol('iterator not implemented')
-
-// events that mean 'the stream is over'
-// these are treated specially, and re-emitted
-// if they are listened for after emitting.
-const isEndish = ev =>
-  ev === 'end' ||
-  ev === 'finish' ||
-  ev === 'prefinish'
-
-const isArrayBuffer = b => b instanceof ArrayBuffer ||
-  typeof b === 'object' &&
-  b.constructor &&
-  b.constructor.name === 'ArrayBuffer' &&
-  b.byteLength >= 0
-
-const isArrayBufferView = b => !Buffer.isBuffer(b) && ArrayBuffer.isView(b)
-
-class Pipe {
-  constructor (src, dest, opts) {
-    this.src = src
-    this.dest = dest
-    this.opts = opts
-    this.ondrain = () => src[RESUME]()
-    dest.on('drain', this.ondrain)
-  }
-  unpipe () {
-    this.dest.removeListener('drain', this.ondrain)
-  }
-  // istanbul ignore next - only here for the prototype
-  proxyErrors () {}
-  end () {
-    this.unpipe()
-    if (this.opts.end)
-      this.dest.end()
-  }
-}
-
-class PipeProxyErrors extends Pipe {
-  unpipe () {
-    this.src.removeListener('error', this.proxyErrors)
-    super.unpipe()
-  }
-  constructor (src, dest, opts) {
-    super(src, dest, opts)
-    this.proxyErrors = er => dest.emit('error', er)
-    src.on('error', this.proxyErrors)
-  }
-}
-
-module.exports = class Minipass extends Stream {
-  constructor (options) {
-    super()
-    this[FLOWING] = false
-    // whether we're explicitly paused
-    this[PAUSED] = false
-    this.pipes = []
-    this.buffer = []
-    this[OBJECTMODE] = options && options.objectMode || false
-    if (this[OBJECTMODE])
-      this[ENCODING] = null
-    else
-      this[ENCODING] = options && options.encoding || null
-    if (this[ENCODING] === 'buffer')
-      this[ENCODING] = null
-    this[ASYNC] = options && !!options.async || false
-    this[DECODER] = this[ENCODING] ? new SD(this[ENCODING]) : null
-    this[EOF] = false
-    this[EMITTED_END] = false
-    this[EMITTING_END] = false
-    this[CLOSED] = false
-    this[EMITTED_ERROR] = null
-    this.writable = true
-    this.readable = true
-    this[BUFFERLENGTH] = 0
-    this[DESTROYED] = false
-  }
-
-  get bufferLength () { return this[BUFFERLENGTH] }
-
-  get encoding () { return this[ENCODING] }
-  set encoding (enc) {
-    if (this[OBJECTMODE])
-      throw new Error('cannot set encoding in objectMode')
-
-    if (this[ENCODING] && enc !== this[ENCODING] &&
-        (this[DECODER] && this[DECODER].lastNeed || this[BUFFERLENGTH]))
-      throw new Error('cannot change encoding')
-
-    if (this[ENCODING] !== enc) {
-      this[DECODER] = enc ? new SD(enc) : null
-      if (this.buffer.length)
-        this.buffer = this.buffer.map(chunk => this[DECODER].write(chunk))
-    }
-
-    this[ENCODING] = enc
-  }
-
-  setEncoding (enc) {
-    this.encoding = enc
-  }
-
-  get objectMode () { return this[OBJECTMODE] }
-  set objectMode (om) { this[OBJECTMODE] = this[OBJECTMODE] || !!om }
-
-  get ['async'] () { return this[ASYNC] }
-  set ['async'] (a) { this[ASYNC] = this[ASYNC] || !!a }
-
-  write (chunk, encoding, cb) {
-    if (this[EOF])
-      throw new Error('write after end')
-
-    if (this[DESTROYED]) {
-      this.emit('error', Object.assign(
-        new Error('Cannot call write after a stream was destroyed'),
-        { code: 'ERR_STREAM_DESTROYED' }
-      ))
-      return true
-    }
-
-    if (typeof encoding === 'function')
-      cb = encoding, encoding = 'utf8'
-
-    if (!encoding)
-      encoding = 'utf8'
-
-    const fn = this[ASYNC] ? defer : f => f()
-
-    // convert array buffers and typed array views into buffers
-    // at some point in the future, we may want to do the opposite!
-    // leave strings and buffers as-is
-    // anything else switches us into object mode
-    if (!this[OBJECTMODE] && !Buffer.isBuffer(chunk)) {
-      if (isArrayBufferView(chunk))
-        chunk = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-      else if (isArrayBuffer(chunk))
-        chunk = Buffer.from(chunk)
-      else if (typeof chunk !== 'string')
-        // use the setter so we throw if we have encoding set
-        this.objectMode = true
-    }
-
-    // handle object mode up front, since it's simpler
-    // this yields better performance, fewer checks later.
-    if (this[OBJECTMODE]) {
-      /* istanbul ignore if - maybe impossible? */
-      if (this.flowing && this[BUFFERLENGTH] !== 0)
-        this[FLUSH](true)
-
-      if (this.flowing)
-        this.emit('data', chunk)
-      else
-        this[BUFFERPUSH](chunk)
-
-      if (this[BUFFERLENGTH] !== 0)
-        this.emit('readable')
-
-      if (cb)
-        fn(cb)
-
-      return this.flowing
-    }
-
-    // at this point the chunk is a buffer or string
-    // don't buffer it up or send it to the decoder
-    if (!chunk.length) {
-      if (this[BUFFERLENGTH] !== 0)
-        this.emit('readable')
-      if (cb)
-        fn(cb)
-      return this.flowing
-    }
-
-    // fast-path writing strings of same encoding to a stream with
-    // an empty buffer, skipping the buffer/decoder dance
-    if (typeof chunk === 'string' &&
-        // unless it is a string already ready for us to use
-        !(encoding === this[ENCODING] && !this[DECODER].lastNeed)) {
-      chunk = Buffer.from(chunk, encoding)
-    }
-
-    if (Buffer.isBuffer(chunk) && this[ENCODING])
-      chunk = this[DECODER].write(chunk)
-
-    // Note: flushing CAN potentially switch us into not-flowing mode
-    if (this.flowing && this[BUFFERLENGTH] !== 0)
-      this[FLUSH](true)
-
-    if (this.flowing)
-      this.emit('data', chunk)
-    else
-      this[BUFFERPUSH](chunk)
-
-    if (this[BUFFERLENGTH] !== 0)
-      this.emit('readable')
-
-    if (cb)
-      fn(cb)
-
-    return this.flowing
-  }
-
-  read (n) {
-    if (this[DESTROYED])
-      return null
-
-    if (this[BUFFERLENGTH] === 0 || n === 0 || n > this[BUFFERLENGTH]) {
-      this[MAYBE_EMIT_END]()
-      return null
-    }
-
-    if (this[OBJECTMODE])
-      n = null
-
-    if (this.buffer.length > 1 && !this[OBJECTMODE]) {
-      if (this.encoding)
-        this.buffer = [this.buffer.join('')]
-      else
-        this.buffer = [Buffer.concat(this.buffer, this[BUFFERLENGTH])]
-    }
-
-    const ret = this[READ](n || null, this.buffer[0])
-    this[MAYBE_EMIT_END]()
-    return ret
-  }
-
-  [READ] (n, chunk) {
-    if (n === chunk.length || n === null)
-      this[BUFFERSHIFT]()
-    else {
-      this.buffer[0] = chunk.slice(n)
-      chunk = chunk.slice(0, n)
-      this[BUFFERLENGTH] -= n
-    }
-
-    this.emit('data', chunk)
-
-    if (!this.buffer.length && !this[EOF])
-      this.emit('drain')
-
-    return chunk
-  }
-
-  end (chunk, encoding, cb) {
-    if (typeof chunk === 'function')
-      cb = chunk, chunk = null
-    if (typeof encoding === 'function')
-      cb = encoding, encoding = 'utf8'
-    if (chunk)
-      this.write(chunk, encoding)
-    if (cb)
-      this.once('end', cb)
-    this[EOF] = true
-    this.writable = false
-
-    // if we haven't written anything, then go ahead and emit,
-    // even if we're not reading.
-    // we'll re-emit if a new 'end' listener is added anyway.
-    // This makes MP more suitable to write-only use cases.
-    if (this.flowing || !this[PAUSED])
-      this[MAYBE_EMIT_END]()
-    return this
-  }
-
-  // don't let the internal resume be overwritten
-  [RESUME] () {
-    if (this[DESTROYED])
-      return
-
-    this[PAUSED] = false
-    this[FLOWING] = true
-    this.emit('resume')
-    if (this.buffer.length)
-      this[FLUSH]()
-    else if (this[EOF])
-      this[MAYBE_EMIT_END]()
-    else
-      this.emit('drain')
-  }
-
-  resume () {
-    return this[RESUME]()
-  }
-
-  pause () {
-    this[FLOWING] = false
-    this[PAUSED] = true
-  }
-
-  get destroyed () {
-    return this[DESTROYED]
-  }
-
-  get flowing () {
-    return this[FLOWING]
-  }
-
-  get paused () {
-    return this[PAUSED]
-  }
-
-  [BUFFERPUSH] (chunk) {
-    if (this[OBJECTMODE])
-      this[BUFFERLENGTH] += 1
-    else
-      this[BUFFERLENGTH] += chunk.length
-    this.buffer.push(chunk)
-  }
-
-  [BUFFERSHIFT] () {
-    if (this.buffer.length) {
-      if (this[OBJECTMODE])
-        this[BUFFERLENGTH] -= 1
-      else
-        this[BUFFERLENGTH] -= this.buffer[0].length
-    }
-    return this.buffer.shift()
-  }
-
-  [FLUSH] (noDrain) {
-    do {} while (this[FLUSHCHUNK](this[BUFFERSHIFT]()))
-
-    if (!noDrain && !this.buffer.length && !this[EOF])
-      this.emit('drain')
-  }
-
-  [FLUSHCHUNK] (chunk) {
-    return chunk ? (this.emit('data', chunk), this.flowing) : false
-  }
-
-  pipe (dest, opts) {
-    if (this[DESTROYED])
-      return
-
-    const ended = this[EMITTED_END]
-    opts = opts || {}
-    if (dest === proc.stdout || dest === proc.stderr)
-      opts.end = false
-    else
-      opts.end = opts.end !== false
-    opts.proxyErrors = !!opts.proxyErrors
-
-    // piping an ended stream ends immediately
-    if (ended) {
-      if (opts.end)
-        dest.end()
-    } else {
-      this.pipes.push(!opts.proxyErrors ? new Pipe(this, dest, opts)
-        : new PipeProxyErrors(this, dest, opts))
-      if (this[ASYNC])
-        defer(() => this[RESUME]())
-      else
-        this[RESUME]()
-    }
-
-    return dest
-  }
-
-  unpipe (dest) {
-    const p = this.pipes.find(p => p.dest === dest)
-    if (p) {
-      this.pipes.splice(this.pipes.indexOf(p), 1)
-      p.unpipe()
-    }
-  }
-
-  addListener (ev, fn) {
-    return this.on(ev, fn)
-  }
-
-  on (ev, fn) {
-    const ret = super.on(ev, fn)
-    if (ev === 'data' && !this.pipes.length && !this.flowing)
-      this[RESUME]()
-    else if (ev === 'readable' && this[BUFFERLENGTH] !== 0)
-      super.emit('readable')
-    else if (isEndish(ev) && this[EMITTED_END]) {
-      super.emit(ev)
-      this.removeAllListeners(ev)
-    } else if (ev === 'error' && this[EMITTED_ERROR]) {
-      if (this[ASYNC])
-        defer(() => fn.call(this, this[EMITTED_ERROR]))
-      else
-        fn.call(this, this[EMITTED_ERROR])
-    }
-    return ret
-  }
-
-  get emittedEnd () {
-    return this[EMITTED_END]
-  }
-
-  [MAYBE_EMIT_END] () {
-    if (!this[EMITTING_END] &&
-        !this[EMITTED_END] &&
-        !this[DESTROYED] &&
-        this.buffer.length === 0 &&
-        this[EOF]) {
-      this[EMITTING_END] = true
-      this.emit('end')
-      this.emit('prefinish')
-      this.emit('finish')
-      if (this[CLOSED])
-        this.emit('close')
-      this[EMITTING_END] = false
-    }
-  }
-
-  emit (ev, data, ...extra) {
-    // error and close are only events allowed after calling destroy()
-    if (ev !== 'error' && ev !== 'close' && ev !== DESTROYED && this[DESTROYED])
-      return
-    else if (ev === 'data') {
-      return !data ? false
-        : this[ASYNC] ? defer(() => this[EMITDATA](data))
-        : this[EMITDATA](data)
-    } else if (ev === 'end') {
-      return this[EMITEND]()
-    } else if (ev === 'close') {
-      this[CLOSED] = true
-      // don't emit close before 'end' and 'finish'
-      if (!this[EMITTED_END] && !this[DESTROYED])
-        return
-      const ret = super.emit('close')
-      this.removeAllListeners('close')
-      return ret
-    } else if (ev === 'error') {
-      this[EMITTED_ERROR] = data
-      const ret = super.emit('error', data)
-      this[MAYBE_EMIT_END]()
-      return ret
-    } else if (ev === 'resume') {
-      const ret = super.emit('resume')
-      this[MAYBE_EMIT_END]()
-      return ret
-    } else if (ev === 'finish' || ev === 'prefinish') {
-      const ret = super.emit(ev)
-      this.removeAllListeners(ev)
-      return ret
-    }
-
-    // Some other unknown event
-    const ret = super.emit(ev, data, ...extra)
-    this[MAYBE_EMIT_END]()
-    return ret
-  }
-
-  [EMITDATA] (data) {
-    for (const p of this.pipes) {
-      if (p.dest.write(data) === false)
-        this.pause()
-    }
-    const ret = super.emit('data', data)
-    this[MAYBE_EMIT_END]()
-    return ret
-  }
-
-  [EMITEND] () {
-    if (this[EMITTED_END])
-      return
-
-    this[EMITTED_END] = true
-    this.readable = false
-    if (this[ASYNC])
-      defer(() => this[EMITEND2]())
-    else
-      this[EMITEND2]()
-  }
-
-  [EMITEND2] () {
-    if (this[DECODER]) {
-      const data = this[DECODER].end()
-      if (data) {
-        for (const p of this.pipes) {
-          p.dest.write(data)
-        }
-        super.emit('data', data)
-      }
-    }
-
-    for (const p of this.pipes) {
-      p.end()
-    }
-    const ret = super.emit('end')
-    this.removeAllListeners('end')
-    return ret
-  }
-
-  // const all = await stream.collect()
-  collect () {
-    const buf = []
-    if (!this[OBJECTMODE])
-      buf.dataLength = 0
-    // set the promise first, in case an error is raised
-    // by triggering the flow here.
-    const p = this.promise()
-    this.on('data', c => {
-      buf.push(c)
-      if (!this[OBJECTMODE])
-        buf.dataLength += c.length
-    })
-    return p.then(() => buf)
-  }
-
-  // const data = await stream.concat()
-  concat () {
-    return this[OBJECTMODE]
-      ? Promise.reject(new Error('cannot concat in objectMode'))
-      : this.collect().then(buf =>
-          this[OBJECTMODE]
-            ? Promise.reject(new Error('cannot concat in objectMode'))
-            : this[ENCODING] ? buf.join('') : Buffer.concat(buf, buf.dataLength))
-  }
-
-  // stream.promise().then(() => done, er => emitted error)
-  promise () {
-    return new Promise((resolve, reject) => {
-      this.on(DESTROYED, () => reject(new Error('stream destroyed')))
-      this.on('error', er => reject(er))
-      this.on('end', () => resolve())
-    })
-  }
-
-  // for await (let chunk of stream)
-  [ASYNCITERATOR] () {
-    const next = () => {
-      const res = this.read()
-      if (res !== null)
-        return Promise.resolve({ done: false, value: res })
-
-      if (this[EOF])
-        return Promise.resolve({ done: true })
-
-      let resolve = null
-      let reject = null
-      const onerr = er => {
-        this.removeListener('data', ondata)
-        this.removeListener('end', onend)
-        reject(er)
-      }
-      const ondata = value => {
-        this.removeListener('error', onerr)
-        this.removeListener('end', onend)
-        this.pause()
-        resolve({ value: value, done: !!this[EOF] })
-      }
-      const onend = () => {
-        this.removeListener('error', onerr)
-        this.removeListener('data', ondata)
-        resolve({ done: true })
-      }
-      const ondestroy = () => onerr(new Error('stream destroyed'))
-      return new Promise((res, rej) => {
-        reject = rej
-        resolve = res
-        this.once(DESTROYED, ondestroy)
-        this.once('error', onerr)
-        this.once('end', onend)
-        this.once('data', ondata)
-      })
-    }
-
-    return { next }
-  }
-
-  // for (let chunk of stream)
-  [ITERATOR] () {
-    const next = () => {
-      const value = this.read()
-      const done = value === null
-      return { value, done }
-    }
-    return { next }
-  }
-
-  destroy (er) {
-    if (this[DESTROYED]) {
-      if (er)
-        this.emit('error', er)
-      else
-        this.emit(DESTROYED)
-      return this
-    }
-
-    this[DESTROYED] = true
-
-    // throw away all buffered data, it's never coming out
-    this.buffer.length = 0
-    this[BUFFERLENGTH] = 0
-
-    if (typeof this.close === 'function' && !this[CLOSED])
-      this.close()
-
-    if (er)
-      this.emit('error', er)
-    else // if no error to emit, still reject pending promises
-      this.emit(DESTROYED)
-
-    return this
-  }
-
-  static isStream (s) {
-    return !!s && (s instanceof Minipass || s instanceof Stream ||
-      s instanceof EE && (
-        typeof s.pipe === 'function' || // readable
-        (typeof s.write === 'function' && typeof s.end === 'function') // writable
-      ))
-  }
-}
-
-
-/***/ }),
-
-/***/ 736:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-// Transforms a stream of TAP into a stream of result objects
-// and string comments.  Emits "results" event with summary.
-const MiniPass = __nccwpck_require__(1077)
-
-// this isn't for performance or anything, it just confuses vim's
-// brace-matching to have these in the middle of functions, and
-// i'm too lazy to dig into vim-javascript to fix it.
-const OPEN_BRACE_EOL = /\{\s*$/
-const SPACE_OPEN_BRACE_EOL = / \{$/
-
-// used by the Parser.parse() method
-const etoa = __nccwpck_require__(711)
-
-// used by Parser.stringify() and Parser.parse() in flattening mode
-const getId = () => {
-  const id = () => id.current++
-  id.current = 1
-  return id
-}
-
-const yaml = __nccwpck_require__(5017)
-
-// every line outside of a yaml block is one of these things, or
-// a comment, or garbage.
-const lineTypes = {
-  testPoint: /^(not )?ok(?: ([0-9]+))?(?:(?: -)?( .*?))?(\{?)\n$/,
-  pragma: /^pragma ([+-])([a-zA-Z0-9_-]+)\n$/,
-  bailout: /^bail out!(.*)\n$/i,
-  version: /^TAP version ([0-9]+)\n$/i,
-  childVersion: /^(    )+TAP version ([0-9]+)\n$/i,
-  plan: /^([0-9]+)\.\.([0-9]+)(?:\s+(?:#\s*(.*)))?\n$/,
-  subtest: /^# Subtest(?:: (.*))?\n$/,
-  subtestIndent: /^    # Subtest(?:: (.*))?\n$/,
-  comment: /^\s*#.*\n$/
-}
-
-const lineType = line => {
-  for (let t in lineTypes) {
-    const match = line.match(lineTypes[t])
-    if (match)
-      return [t, match]
-  }
-  return null
-}
-
-const parseDirective = line => {
-  if (!line.trim())
-    return false
-
-  line = line.replace(OPEN_BRACE_EOL, '').trim()
-  const time = line.match(/^time=((?:[1-9][0-9]*|0)(?:\.[0-9]+)?)(ms|s)$/i)
-  if (time) {
-    let n = +time[1]
-    if (time[2] === 's') {
-      // JS does weird things with floats.  Round it off a bit.
-      n *= 1000000
-      n = Math.round(n)
-      n /= 1000
-    }
-    return [ 'time', n ]
-  }
-
-  const type = line.match(/^(todo|skip)(?:\S*)\b(.*)$/i)
-  if (!type)
-    return false
-
-  return [
-    type[1].toLowerCase(),
-    type[2].trim() || true,
-  ]
-}
-
-class Result {
-  constructor (parsed, count) {
-    const ok = !parsed[1]
-    const id = +(parsed[2] || 0)
-    let buffered = parsed[4]
-    this.ok = ok
-    if (parsed[2])
-      this.id = id
-
-    let rest = parsed[3] || ''
-    let name
-    // We know at this point the parsed result cannot contain \n,
-    // so we can leverage that as a placeholder.
-    // first, replace any PAIR of \ chars with \n
-    // then, split on any # that is not preceeded by \
-    // the first of these is definitely the description
-    // the rest is the directive, if recognized, otherwise
-    // we just lump it onto the description, but escaped.
-    // then any \n chars in either are turned into \ (just one)
-
-    // escape \ with \
-    rest = rest.replace(/(\\\\)/g, '\n')
-
-    rest = rest.split(/(?<!\\)# /g)
-    name = rest.shift().replace(/\\#/g, '#').replace(/\n/g, '\\')
-    rest = rest.join('# ').replace(/\\#/g, '#').replace(/\n/g, '\\')
-
-    // now, let's see if there's a directive in there.
-    const dir = parseDirective(rest.trim())
-    if (!dir)
-      name += (rest ? '# ' + rest : '') + buffered
-    else {
-      // handle buffered subtests with todo/skip on them, like
-      // ok 1 - bar # todo foo {\n
-      const dirKey = dir[0]
-      const dirValue = dir[1]
-      this[dirKey] = dirValue
-    }
-
-    if (OPEN_BRACE_EOL.test(name)) {
-      name = name.replace(OPEN_BRACE_EOL, '')
-      buffered = '{'
-    }
-
-    if (buffered === '{')
-      this.buffered = true
-
-    if (name)
-      this.name = name.trim()
-  }
-}
-
-class Parser extends MiniPass {
-  static parse (str, options = {}) {
-    const { flat = false } = options
-    const ignore = [
-      'pipe',
-      'unpipe',
-      'prefinish',
-      'finish',
-      'line',
-      'pass',
-      'fail',
-      'todo',
-      'skip',
-      'result',
-    ]
-    if (flat)
-      ignore.push('assert', 'child', 'plan', 'complete')
-    const parser = new Parser(options)
-    const events = etoa(parser, ignore)
-    if (flat) {
-      const id = getId()
-      parser.on('result', res => {
-        const name = []
-        if (res.fullname)
-          name.push(res.fullname)
-        if (res.name)
-          name.push(res.name)
-        res.name = name.join(' > ').trim()
-        res.fullname = ''
-        res.id = id()
-        events.push(['assert', res])
-      })
-      parser.on('complete', res => {
-        if (!res.bailout)
-          events.push(['plan', { end: id.current - 1, start: 1 }])
-        events.push(['complete', res])
-      })
-    }
-
-    parser.end(str)
-    return events
-  }
-
-  static stringify (msg, { flat = false, indent = '', id = getId() } = {}) {
-    const ind = flat ? '' : indent
-    return ind + msg.map(item => {
-      switch (item[0]) {
-        case 'child':
-          const comment = item[1][0]
-          const child = item[1].slice(1)
-          return Parser.stringify([comment], { flat, indent: '', id }) +
-            Parser.stringify(child, { flat, indent: '    ', id })
-
-        case 'version':
-          return 'TAP version ' + item[1] + '\n'
-
-        case 'plan':
-          if (flat) {
-            if (indent !== '')
-              return ''
-            item[1].start = 1
-            item[1].end = id.current - 1
-          }
-          return item[1].start + '..' + item[1].end
-            + (item[1].comment ? ' # ' + esc(item[1].comment) : '') + '\n'
-
-        case 'pragma':
-          return 'pragma ' + (item[2] ? '+' : '-') + item[1] + '\n'
-
-        case 'bailout':
-          return 'Bail out!' + (item[1] ? (' ' + esc(item[1])) : '') + '\n'
-
-        case 'assert':
-          const res = item[1]
-          if (flat) {
-            res.id = id()
-            const name = []
-            if (res.fullname)
-              name.push(res.fullname)
-            if (res.name)
-              name.push(res.name)
-            res.name = name.join(' > ').trim()
-          }
-          return (res.ok ? '' : 'not ') + 'ok' +
-            (res.id !== undefined ? ' ' + res.id : '' ) +
-            (res.name
-              ? ' - ' + esc(res.name).replace(SPACE_OPEN_BRACE_EOL, '')
-              : '') +
-            (res.skip ? ' # SKIP' +
-              (res.skip === true ? '' : ' ' + esc(res.skip)) : '') +
-            (res.todo ? ' # TODO' +
-              (res.todo === true ? '' : ' ' + esc(res.todo)) : '') +
-            (res.time ? ' # time=' + res.time + 'ms' : '') +
-            '\n' +
-            (res.diag ?
-               '  ---\n  ' +
-               yaml.stringify(res.diag).split('\n').join('\n  ').trim() +
-               '\n  ...\n'
-               : '')
-
-        case 'extra':
-        case 'comment':
-          return item[1]
-      }
-    }).join('').split('\n').join('\n' + ind).trim() + '\n'
-  }
-
-  constructor (options, onComplete) {
-    if (typeof options === 'function') {
-      onComplete = options
-      options = {}
-    }
-
-    options = options || {}
-    super(options)
-    this.resume()
-
-    if (onComplete)
-      this.on('complete', onComplete)
-
-    this.time = null
-    this.name = options.name || ''
-    this.comments = []
-    this.results = null
-    this.braceLevel = null
-    this.parent = options.parent || null
-    this.closingTestPoint = this.parent && options.closingTestPoint
-    this.root = options.parent ? this.parent.root : this
-    this.failures = []
-    if (options.passes)
-      this.passes = []
-    this.level = options.level || 0
-
-    this.pointsSeen = new Map()
-    this.buffer = ''
-    this.bail = !!options.bail
-    this.bailingOut = false
-    this.bailedOut = false
-    this.syntheticBailout = false
-    this.syntheticPlan = false
-    this.omitVersion = !!options.omitVersion
-    this.planStart = -1
-    this.planEnd = -1
-    this.planComment = ''
-    this.yamlish = ''
-    this.yind = ''
-    this.child = null
-    this.previousChild = null
-    this.current = null
-    this.maybeSubtest = null
-    this.extraQueue = []
-    this.buffered = options.buffered || null
-    this.aborted = false
-    this.preserveWhitespace = options.preserveWhitespace || false
-
-    this.count = 0
-    this.pass = 0
-    this.fail = 0
-    this.todo = 0
-    this.skip = 0
-    this.ok = true
-
-    this.strict = options.strict || false
-    this.pragmas = { strict: this.strict }
-
-    this.postPlan = false
-  }
-
-  get fullname () {
-    return ((this.parent ? this.parent.fullname + ' ' : '') +
-      (this.name || '')).trim()
-  }
-
-  tapError (error, line) {
-    if (line)
-      this.emit('line', line)
-    this.ok = false
-    this.fail ++
-    if (typeof error === 'string') {
-      error = {
-        tapError: error
-      }
-    }
-    this.failures.push(error)
-  }
-
-  parseTestPoint (testPoint, line) {
-    // need to hold off on this when we have a child so we can
-    // associate the closing test point with the test.
-    if (!this.child)
-      this.emitResult()
-
-    if (this.bailedOut)
-      return
-
-    const resId = testPoint[2]
-
-    const res = new Result(testPoint, this.count)
-
-    if (resId && this.planStart !== -1) {
-      const lessThanStart = res.id < this.planStart
-      const greaterThanEnd = res.id > this.planEnd
-      if (lessThanStart || greaterThanEnd) {
-        if (lessThanStart)
-          res.tapError = 'id less than plan start'
-        else
-          res.tapError = 'id greater than plan end'
-        res.plan = { start: this.planStart, end: this.planEnd }
-        this.tapError(res)
-      }
-    }
-
-    if (resId && this.pointsSeen.has(res.id)) {
-      res.tapError = 'test point id ' + resId + ' appears multiple times'
-      res.previous = this.pointsSeen.get(res.id)
-      this.tapError(res)
-    } else if (resId) {
-      this.pointsSeen.set(res.id, res)
-    }
-
-    if (this.child) {
-      if (!this.child.closingTestPoint)
-        this.child.closingTestPoint = res
-      this.emitResult()
-      // can only bail out here in the case of a child with broken diags
-      // anything else would have bailed out already.
-      if (this.bailedOut)
-        return
-    }
-
-    this.emit('line', line)
-
-    if (!res.skip && !res.todo)
-      this.ok = this.ok && res.ok
-
-    // hold onto it, because we might get yamlish diagnostics
-    this.current = res
-  }
-
-  nonTap (data, didLine) {
-    if (this.bailingOut && /^( {4})*\}\n$/.test(data))
-      return
-
-    if (this.strict) {
-      const err = {
-        tapError: 'Non-TAP data encountered in strict mode',
-        data: data
-      }
-      this.tapError(err)
-      if (this.parent)
-        this.parent.tapError(err)
-    }
-
-    // emit each line, then the extra as a whole
-    if (!didLine)
-      data.split('\n').slice(0, -1).forEach(line => {
-        line += '\n'
-        if (this.current || this.extraQueue.length)
-          this.extraQueue.push(['line', line])
-        else
-          this.emit('line', line)
-      })
-
-    this.emitExtra(data)
-  }
-
-  emitExtra (data, fromChild) {
-    if (this.parent)
-      this.parent.emitExtra(
-        data.replace(/\n$/, '').replace(/^/gm, '    ') + '\n', true
-      )
-    else if (!fromChild && (this.current || this.extraQueue.length))
-      this.extraQueue.push(['extra', data])
-    else
-      this.emit('extra', data)
-  }
-
-  plan (start, end, comment, line) {
-    // not allowed to have more than one plan
-    if (this.planStart !== -1) {
-      this.nonTap(line)
-      return
-    }
-
-    // can't put a plan in a child.
-    if (this.child || this.yind) {
-      this.nonTap(line)
-      return
-    }
-
-    this.emitResult()
-    if (this.bailedOut)
-      return
-
-    // 1..0 is a special case. Otherwise, end must be >= start
-    if (end < start && end !== 0 && start !== 1) {
-      if (this.strict)
-        this.tapError({
-          tapError: 'plan end cannot be less than plan start',
-          plan: { start, end },
-        }, line)
-      else
-        this.nonTap(line)
-      return
-    }
-
-    this.planStart = start
-    this.planEnd = end
-    const p = { start: start, end: end }
-    if (comment)
-      this.planComment = p.comment = comment
-
-    // This means that the plan is coming at the END of all the tests
-    // Plans MUST be either at the beginning or the very end.  We treat
-    // plans like '1..0' the same, since they indicate that no tests
-    // will be coming.
-    if (this.count !== 0 || this.planEnd === 0) {
-      const seen = new Set()
-      for (const [id, res] of this.pointsSeen.entries()) {
-        const tapError = id < start ? 'id less than plan start'
-          : id > end ? 'id greater than plan end'
-          : null
-        if (tapError) {
-          seen.add(tapError)
-          res.tapError = tapError
-          res.plan = { start, end }
-          this.tapError(res)
-        }
-      }
-      this.postPlan = true
-    }
-
-    this.emit('line', line)
-    this.emit('plan', p)
-  }
-
-  resetYamlish () {
-    this.yind = ''
-    this.yamlish = ''
-  }
-
-  // that moment when you realize it's not what you thought it was
-  yamlGarbage () {
-    const yamlGarbage = this.yind + '---\n' + this.yamlish
-    this.emitResult()
-    if (this.bailedOut)
-      return
-    this.nonTap(yamlGarbage, true)
-  }
-
-  yamlishLine (line) {
-    if (line === this.yind + '...\n') {
-      // end the yaml block
-      this.processYamlish()
-    } else {
-      this.yamlish += line
-    }
-  }
-
-  processYamlish () {
-    const yamlish = this.yamlish
-    this.resetYamlish()
-
-    let diags
-    try {
-      diags = yaml.parse(yamlish)
-    } catch (er) {
-      this.nonTap(this.yind + '---\n' + yamlish + this.yind + '...\n', true)
-      return
-    }
-
-    this.current.diag = diags
-    // we still don't emit the result here yet, to support diags
-    // that come ahead of buffered subtests.
-  }
-
-  write (chunk, encoding, cb) {
-    if (this.aborted)
-      return
-
-    if (typeof encoding === 'string' && encoding !== 'utf8')
-      chunk = Buffer.from(chunk, encoding)
-
-    if (Buffer.isBuffer(chunk))
-      chunk += ''
-
-    if (typeof encoding === 'function') {
-      cb = encoding
-      encoding = null
-    }
-
-    this.buffer += chunk
-    do {
-      const match = this.buffer.match(/^.*\r?\n/)
-      if (!match)
-        break
-
-      this.buffer = this.buffer.substring(match[0].length)
-      this.parse(match[0])
-    } while (this.buffer.length)
-
-    if (cb)
-      process.nextTick(cb)
-
-    return true
-  }
-
-  end (chunk, encoding, cb) {
-    if (chunk) {
-      if (typeof encoding === 'function') {
-        cb = encoding
-        encoding = null
-      }
-      this.write(chunk, encoding)
-    }
-
-    if (this.buffer)
-      this.write('\n')
-
-    // if we have yamlish, means we didn't finish with a ...
-    if (this.yamlish)
-      this.yamlGarbage()
-
-    this.emitResult()
-
-    if (this.syntheticBailout && this.level === 0) {
-      this.syntheticBailout = false
-      let reason = this.bailedOut
-      if (reason === true)
-        reason = ''
-      else
-        reason = ' ' + reason
-      this.emit('line', 'Bail out!' + reason + '\n')
-    }
-
-    let skipAll
-
-    if (this.planEnd === 0 && this.planStart === 1) {
-      skipAll = true
-      if (this.count === 0) {
-        this.ok = true
-      } else {
-        this.tapError('Plan of 1..0, but test points encountered')
-      }
-    } else if (!this.bailedOut && this.planStart === -1) {
-      if (this.count === 0 && !this.syntheticPlan) {
-        this.syntheticPlan = true
-        if (this.buffered) {
-          this.planStart = 1
-          this.planEnd = 0
-        } else
-          this.plan(1, 0, 'no tests found', '1..0 # no tests found\n')
-        skipAll = true
-      } else {
-        this.tapError('no plan')
-      }
-    } else if (this.ok && this.count !== (this.planEnd - this.planStart + 1)) {
-      this.tapError('incorrect number of tests')
-    }
-
-    this.emitComplete(skipAll)
-    if (cb)
-      process.nextTick(cb)
-
-    return this
-  }
-
-  emitComplete (skipAll) {
-    if (!this.results) {
-      const res = this.results = new FinalResults(!!skipAll, this)
-
-      if (!res.bailout) {
-        // comment a bit at the end so we know what happened.
-        // but don't repeat these comments if they're already present.
-        if (res.plan.end !== res.count)
-          this.emitComment('test count(' + res.count +
-                           ') != plan(' + res.plan.end + ')', false, true)
-
-        if (res.fail > 0 && !res.ok)
-          this.emitComment('failed ' + res.fail +
-                           (res.count > 1 ? ' of ' + res.count + ' tests'
-                            : ' test'),
-                           false, true)
-
-        if (res.todo > 0)
-          this.emitComment('todo: ' + res.todo, false, true)
-
-        if (res.skip > 0)
-          this.emitComment('skip: ' + res.skip, false, true)
-      }
-
-      this.emit('complete', this.results)
-    }
-  }
-
-  version (version, line) {
-    // If version is specified, must be at the very beginning.
-    if (version >= 13 &&
-        this.planStart === -1 &&
-        this.count === 0 &&
-        !this.current) {
-      this.emit('line', line)
-      this.emit('version', version)
-    } else
-      this.nonTap(line)
-  }
-
-  pragma (key, value, line) {
-    // can't put a pragma in a child or yaml block
-    if (this.child) {
-      this.nonTap(line)
-      return
-    }
-
-    this.emitResult()
-    if (this.bailedOut)
-      return
-    // only the 'strict' pragma is currently relevant
-    if (key === 'strict') {
-      this.strict = value
-    }
-    this.pragmas[key] = value
-    this.emit('line', line)
-    this.emit('pragma', key, value)
-  }
-
-  bailout (reason, synthetic) {
-    this.syntheticBailout = synthetic
-
-    if (this.bailingOut)
-      return
-
-    // Guard because emitting a result can trigger a forced bailout
-    // if the harness decides that failures should be bailouts.
-    this.bailingOut = reason || true
-
-    if (!synthetic)
-      this.emitResult()
-    else
-      this.current = null
-
-    this.bailedOut = this.bailingOut
-    this.ok = false
-    if (!synthetic) {
-      // synthetic bailouts get emitted on end
-      let line = 'Bail out!'
-      if (reason)
-        line += ' ' + reason
-      this.emit('line', line + '\n')
-    }
-    this.emit('bailout', reason)
-    if (this.parent) {
-      this.end()
-      this.parent.bailout(reason, true)
-    }
-  }
-
-  clearExtraQueue () {
-    for (let c = 0; c < this.extraQueue.length; c++) {
-      this.emit(this.extraQueue[c][0], this.extraQueue[c][1])
-    }
-    this.extraQueue.length = 0
-  }
-
-  endChild () {
-    if (this.child && (!this.bailingOut || this.child.count)) {
-      if (this.child.closingTestPoint)
-        this.child.time = this.child.closingTestPoint.time || null
-      this.previousChild = this.child
-      this.child.end()
-      this.child = null
-    }
-  }
-
-  emitResult () {
-    if (this.bailedOut)
-      return
-
-    this.endChild()
-    this.resetYamlish()
-
-    if (!this.current)
-      return this.clearExtraQueue()
-
-    const res = this.current
-    this.current = null
-
-    this.count++
-    if (res.ok) {
-      this.pass++
-      if (this.passes)
-        this.passes.push(res)
-    } else {
-      this.fail++
-      if (!res.todo && !res.skip) {
-        this.ok = false
-        this.failures.push(res)
-      }
-    }
-
-    if (res.skip)
-      this.skip++
-
-    if (res.todo)
-      this.todo++
-
-    this.emitAssert(res)
-    if (this.bail && !res.ok && !res.todo && !res.skip && !this.bailingOut) {
-      this.maybeChild = null
-      const ind = new Array(this.level + 1).join('    ')
-      let p
-      for (p = this; p.parent; p = p.parent);
-      const bailName = res.name ? ' ' + res.name : ''
-      p.parse(ind + 'Bail out!' + bailName + '\n')
-    }
-    this.clearExtraQueue()
-  }
-
-  // TODO: We COULD say that any "relevant tap" line that's indented
-  // by 4 spaces starts a child test, and just call it 'unnamed' if
-  // it does not have a prefix comment.  In that case, any number of
-  // 4-space indents can be plucked off to try to find a relevant
-  // TAP line type, and if so, start the unnamed child.
-  startChild (line) {
-    const maybeBuffered = this.current && this.current.buffered
-    const unindentStream = !maybeBuffered && this.maybeChild
-    const indentStream = !maybeBuffered && !unindentStream &&
-      lineTypes.subtestIndent.test(line)
-    const unnamed = !maybeBuffered && !unindentStream && !indentStream
-
-    // If we have any other result waiting in the wings, we need to emit
-    // that now.  A buffered test emits its test point at the *end* of
-    // the child subtest block, so as to match streamed test semantics.
-    if (!maybeBuffered)
-      this.emitResult()
-
-    if (this.bailedOut)
-      return
-
-    this.child = new Parser({
-      bail: this.bail,
-      parent: this,
-      level: this.level + 1,
-      buffered: maybeBuffered,
-      closingTestPoint: maybeBuffered && this.current,
-      preserveWhitespace: this.preserveWhitespace,
-      omitVersion: true,
-      strict: this.strict
-    })
-
-    this.child.on('complete', results => {
-      if (!results.ok)
-        this.ok = false
-    })
-
-    this.child.on('line', l => {
-      if (l.trim() || this.preserveWhitespace)
-        l = '    ' + l
-      this.emit('line', l)
-    })
-
-    // Canonicalize the parsing result of any kind of subtest
-    // if it's a buffered subtest or a non-indented Subtest directive,
-    // then synthetically emit the Subtest comment
-    line = line.substring(4)
-    let subtestComment
-    if (indentStream) {
-      subtestComment = line
-      line = null
-    } else if (maybeBuffered) {
-      subtestComment = '# Subtest: ' + this.current.name + '\n'
-    } else {
-      subtestComment = this.maybeChild || '# Subtest\n'
-    }
-
-    this.maybeChild = null
-    this.child.name = subtestComment.substring('# Subtest: '.length).trim()
-
-    // at some point, we may wish to move 100% to preferring
-    // the Subtest comment on the parent level.  If so, uncomment
-    // this line, and remove the child.emitComment below.
-    // this.emit('comment', subtestComment)
-    if (!this.child.buffered)
-      this.emit('line', subtestComment)
-    this.emit('child', this.child)
-    this.child.emitComment(subtestComment, true)
-    if (line)
-      this.child.parse(line)
-  }
-
-  abort (message, extra) {
-    if (this.child) {
-      const b = this.child.buffered
-      this.child.abort(message, extra)
-      extra = null
-      if (b)
-        this.write('\n}\n')
-    }
-
-    let dump
-    if (extra && Object.keys(extra).length) {
-      try {
-        dump = yaml.stringify(extra).trimRight()
-      } catch (er) {}
-    }
-
-    let y
-    if (dump)
-      y = '  ---\n  ' + dump.split('\n').join('\n  ') + '\n  ...\n'
-    else
-      y = '\n'
-
-    let n = (this.count || 0) + 1
-    if (this.current)
-      n += 1
-
-    if (this.planEnd !== -1 && this.planEnd < n && this.parent) {
-      // skip it, let the parent do this.
-      this.aborted = true
-      return
-    }
-
-    let ind = '' // new Array(this.level + 1).join('    ')
-    message = message.replace(/[\n\r\s\t]/g, ' ')
-    let point = '\nnot ok ' + n + ' - ' + message + '\n' + y
-
-    if (this.planEnd === -1)
-      point += '1..' + n + '\n'
-
-    this.write(point)
-    this.aborted = true
-    this.end()
-  }
-
-  emitAssert (res) {
-    res.fullname = this.fullname
-
-    this.emit('assert', res)
-
-    // see if we need to surface to the top level
-    if (this.child || this.previousChild) {
-      const c = this.child || this.previousChild
-      this.previousChild = null
-      if (res.name === c.name &&
-          res.ok === c.results.ok &&
-          c.results.count &&
-          !res.todo && !res.skip) {
-        // just procedural, ignore it
-        return
-      }
-    }
-
-    // surface result to the top level parser
-    this.root.emit('result', res)
-    if (res.skip)
-      this.root.emit('skip', res)
-    else if (res.todo)
-      this.root.emit('todo', res)
-    else if (!res.ok)
-      this.root.emit('fail', res)
-    else
-      this.root.emit('pass', res)
-  }
-
-  emitComment (line, skipLine, noDuplicate) {
-    if (line.trim().charAt(0) !== '#')
-      line = '# ' + line
-
-    if (line.slice(-1) !== '\n')
-      line += '\n'
-
-    if (noDuplicate && this.comments.indexOf(line) !== -1)
-      return
-
-    this.comments.push(line)
-    const dir = parseDirective(line.replace(/^\s*#\s*/, '').trim())
-    if (dir[0] === 'time' && typeof dir[1] === 'number')
-      this.time = dir[1]
-
-    if (this.current || this.extraQueue.length) {
-      // no way to get here with skipLine being true
-      this.extraQueue.push(['line', line])
-      this.extraQueue.push(['comment', line])
-    } else {
-      if (!skipLine)
-        this.emit('line', line)
-      this.emit('comment', line)
-    }
-  }
-
-  parse (line) {
-    // normalize line endings
-    line = line.replace(/\r\n$/, '\n')
-
-    // sometimes empty lines get trimmed, but are still part of
-    // a subtest or a yaml block.  Otherwise, nothing to parse!
-    if (line === '\n') {
-      if (this.child)
-        line = '    ' + line
-      else if (this.yind)
-        line = this.yind + line
-    }
-
-    // If we're bailing out, then the only thing we want to see is the
-    // end of a buffered child test.  Anything else should be ignored.
-    // But!  if we're bailing out a nested child, and ANOTHER nested child
-    // comes after that one, then we don't want the second child's } to
-    // also show up, or it looks weird.
-    if (this.bailingOut) {
-      if (!/^\s*}\n$/.test(line))
-        return
-      else if (!this.braceLevel || line.length < this.braceLevel)
-        this.braceLevel = line.length
-      else
-        return
-    }
-
-    // This allows omitting even parsing the version if the test is
-    // an indented child test.  Several parsers get upset when they
-    // see an indented version field.
-    if (this.omitVersion && lineTypes.version.test(line) && !this.yind)
-      return
-
-    // check to see if the line is indented.
-    // if it is, then it's either a subtest, yaml, or garbage.
-    const indent = line.match(/^[ \t]*/)[0]
-    if (indent) {
-      this.parseIndent(line, indent)
-      return
-    }
-
-    // In any case where we're going to emitResult, that can trigger
-    // a bailout, so we need to only emit the line once we know that
-    // isn't happening, to prevent cases where there's a bailout, and
-    // then one more line of output.  That'll also prevent the case
-    // where the test point is emitted AFTER the line that follows it.
-
-    // buffered subtests must end with a }
-    if (this.child && this.child.buffered && line === '}\n') {
-      this.endChild()
-      this.emit('line', line)
-      this.emitResult()
-      return
-    }
-
-    // just a \n, emit only if we care about whitespace
-    const validLine = this.preserveWhitespace || line.trim() || this.yind
-    if (line === '\n')
-      return validLine && this.emit('line', line)
-
-    // buffered subtest with diagnostics
-    if (this.current && line === '{\n' &&
-        this.current.diag &&
-        !this.current.buffered &&
-        !this.child) {
-      this.emit('line', line)
-      this.current.buffered = true
-      return
-    }
-
-    // now we know it's not indented, so if it's either valid tap
-    // or garbage.  Get the type of line.
-    const type = lineType(line)
-    if (!type) {
-      this.nonTap(line)
-      return
-    }
-
-    if (type[0] === 'comment') {
-      this.emitComment(line)
-      return
-    }
-
-    // if we have any yamlish, it's garbage now.  We tolerate non-TAP and
-    // comments in the midst of yaml (though, perhaps, that's questionable
-    // behavior), but any actual TAP means that the yaml block was just
-    // not valid.
-    if (this.yind)
-      this.yamlGarbage()
-
-    // If it's anything other than a comment or garbage, then any
-    // maybeChild is just an unsatisfied promise.
-    if (this.maybeChild) {
-      this.emitComment(this.maybeChild)
-      this.maybeChild = null
-    }
-
-    // nothing but comments can come after a trailing plan
-    if (this.postPlan) {
-      this.nonTap(line)
-      return
-    }
-
-    // ok, now it's maybe a thing
-    if (type[0] === 'bailout') {
-      this.bailout(unesc(type[1][1].trim()), false)
-      return
-    }
-
-    if (type[0] === 'pragma') {
-      const pragma = type[1]
-      this.pragma(pragma[2], pragma[1] === '+', line)
-      return
-    }
-
-    if (type[0] === 'version') {
-      const version = type[1]
-      this.version(parseInt(version[1], 10), line)
-      return
-    }
-
-    if (type[0] === 'plan') {
-      const plan = type[1]
-      this.plan(+plan[1], +plan[2], unesc((plan[3] || '')).trim(), line)
-      return
-    }
-
-    // streamed subtests will end when this test point is emitted
-    if (type[0] === 'testPoint') {
-      // note: it's weird, but possible, to have a testpoint ending in
-      // { before a streamed subtest which ends with a test point
-      // instead of a }.  In this case, the parser gets confused, but
-      // also, even beginning to handle that means doing a much more
-      // involved multi-line parse.  By that point, the subtest block
-      // has already been emitted as a 'child' event, so it's too late
-      // to really do the optimal thing.  The only way around would be
-      // to buffer up everything and do a multi-line parse.  This is
-      // rare and weird, and a multi-line parse would be a bigger
-      // rewrite, so I'm allowing it as it currently is.
-      this.parseTestPoint(type[1], line)
-      return
-    }
-
-    // We already detected nontap up above, so the only case left
-    // should be a `# Subtest:` comment.  Ignore for coverage, but
-    // include the error here just for good measure.
-    /* istanbul ignore else */
-    if (type[0] === 'subtest') {
-      // this is potentially a subtest.  Not indented.
-      // hold until later.
-      this.maybeChild = line
-    } else {
-      throw new Error('Unhandled case: ' + type[0])
-    }
-  }
-
-  parseIndent (line, indent) {
-    // still belongs to the child, so pass it along.
-    if (this.child && line.substring(0, 4) === '    ') {
-      line = line.substring(4)
-      this.child.write(line)
-      return
-    }
-
-    // one of:
-    // - continuing yaml block
-    // - starting yaml block
-    // - ending yaml block
-    // - body of a new child subtest that was previously introduced
-    // - An indented subtest directive
-    // - A comment, or garbage
-
-    // continuing/ending yaml block
-    if (this.yind) {
-      if (line.indexOf(this.yind) === 0) {
-        this.emit('line', line)
-        this.yamlishLine(line)
-        return
-      } else {
-        // oops!  that was not actually yamlish, I guess.
-        // this is a case where the indent is shortened mid-yamlish block
-        // treat existing yaml as garbage, continue parsing this line
-        this.yamlGarbage()
-      }
-    }
-
-
-    // start a yaml block under a test point
-    if (this.current && !this.yind && line === indent + '---\n') {
-      this.yind = indent
-      this.emit('line', line)
-      return
-    }
-
-    // at this point, not yamlish, and not an existing child test.
-    // We may have already seen an unindented Subtest directive, or
-    // a test point that ended in { indicating a buffered subtest
-    // Child tests are always indented 4 spaces.
-    if (line.substring(0, 4) === '    ') {
-      if (this.maybeChild ||
-          this.current && this.current.buffered ||
-          lineTypes.subtestIndent.test(line)) {
-        this.startChild(line)
-        return
-      }
-
-      // It's _something_ indented, if the indentation is divisible by
-      // 4 spaces, and the result is actual TAP of some sort, then do
-      // a child subtest for it as well.
-      //
-      // This will lead to some ambiguity in cases where there are multiple
-      // levels of non-signaled subtests, but a Subtest comment in the
-      // middle of them, which may or may not be considered "indented"
-      // See the subtest-no-comment-mid-comment fixture for an example
-      // of this.  As it happens, the preference is towards an indented
-      // Subtest comment as the interpretation, which is the only possible
-      // way to resolve this, since otherwise there's no way to distinguish
-      // between an anonymous subtest with a non-indented Subtest comment,
-      // and an indented Subtest comment.
-      const s = line.match(/( {4})+(.*\n)$/)
-      if (s[2].charAt(0) !== ' ') {
-        // integer number of indentations.
-        const type = lineType(s[2])
-        if (type) {
-          if (type[0] === 'comment') {
-            this.emit('line', line)
-            this.emitComment(line)
-          } else {
-            // it's relevant!  start as an "unnamed" child subtest
-            this.startChild(line)
-          }
-          return
-        }
-      }
-    }
-
-    // at this point, it's either a non-subtest comment, or garbage.
-
-    if (lineTypes.comment.test(line)) {
-      this.emitComment(line)
-      return
-    }
-
-    this.nonTap(line)
-  }
-}
-
-// turn \ into \\ and # into \#, for stringifying back to TAP
-const esc = str => str
-  .replace(/\\/g, '\\\\')
-  .replace(/#/g, '\\#')
-
-const unesc = str => str
-  .replace(/(\\\\)/g, '\u0000')
-  .replace(/\\#/g, '#')
-  .replace(/\u0000/g, '\\')
-
-class FinalResults {
-  constructor (skipAll, self) {
-    this.ok = self.ok
-    this.count = self.count
-    this.pass = self.pass
-    this.fail = self.fail || 0
-    this.bailout = self.bailedOut || false
-    this.todo = self.todo || 0
-    this.skip = skipAll ? self.count : self.skip || 0
-    this.plan = new FinalPlan(skipAll, self)
-    this.failures = self.failures
-    this.time = self.time
-    if (self.passes)
-      this.passes = self.passes
-  }
-}
-
-class FinalPlan {
-  constructor (skipAll, self) {
-    this.start = self.planStart === -1 ? null : self.planStart
-    this.end = self.planStart === -1 ? null : self.planEnd
-    this.skipAll = skipAll
-    this.skipReason = skipAll ? self.planComment : ''
-    this.comment = self.planComment || ''
-  }
-}
-
-module.exports = Parser
-
-
-/***/ }),
-
-/***/ 5017:
+/***/ 4723:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 module.exports = {
@@ -4235,6 +2387,652 @@ exports.debug = debug; // for test
 
 /***/ }),
 
+/***/ 5840:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+Object.defineProperty(exports, "v1", ({
+  enumerable: true,
+  get: function () {
+    return _v.default;
+  }
+}));
+Object.defineProperty(exports, "v3", ({
+  enumerable: true,
+  get: function () {
+    return _v2.default;
+  }
+}));
+Object.defineProperty(exports, "v4", ({
+  enumerable: true,
+  get: function () {
+    return _v3.default;
+  }
+}));
+Object.defineProperty(exports, "v5", ({
+  enumerable: true,
+  get: function () {
+    return _v4.default;
+  }
+}));
+Object.defineProperty(exports, "NIL", ({
+  enumerable: true,
+  get: function () {
+    return _nil.default;
+  }
+}));
+Object.defineProperty(exports, "version", ({
+  enumerable: true,
+  get: function () {
+    return _version.default;
+  }
+}));
+Object.defineProperty(exports, "validate", ({
+  enumerable: true,
+  get: function () {
+    return _validate.default;
+  }
+}));
+Object.defineProperty(exports, "stringify", ({
+  enumerable: true,
+  get: function () {
+    return _stringify.default;
+  }
+}));
+Object.defineProperty(exports, "parse", ({
+  enumerable: true,
+  get: function () {
+    return _parse.default;
+  }
+}));
+
+var _v = _interopRequireDefault(__nccwpck_require__(8628));
+
+var _v2 = _interopRequireDefault(__nccwpck_require__(6409));
+
+var _v3 = _interopRequireDefault(__nccwpck_require__(5122));
+
+var _v4 = _interopRequireDefault(__nccwpck_require__(9120));
+
+var _nil = _interopRequireDefault(__nccwpck_require__(5332));
+
+var _version = _interopRequireDefault(__nccwpck_require__(1595));
+
+var _validate = _interopRequireDefault(__nccwpck_require__(6900));
+
+var _stringify = _interopRequireDefault(__nccwpck_require__(8950));
+
+var _parse = _interopRequireDefault(__nccwpck_require__(2746));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+/***/ }),
+
+/***/ 4569:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _crypto = _interopRequireDefault(__nccwpck_require__(6113));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function md5(bytes) {
+  if (Array.isArray(bytes)) {
+    bytes = Buffer.from(bytes);
+  } else if (typeof bytes === 'string') {
+    bytes = Buffer.from(bytes, 'utf8');
+  }
+
+  return _crypto.default.createHash('md5').update(bytes).digest();
+}
+
+var _default = md5;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 5332:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+var _default = '00000000-0000-0000-0000-000000000000';
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 2746:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _validate = _interopRequireDefault(__nccwpck_require__(6900));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function parse(uuid) {
+  if (!(0, _validate.default)(uuid)) {
+    throw TypeError('Invalid UUID');
+  }
+
+  let v;
+  const arr = new Uint8Array(16); // Parse ########-....-....-....-............
+
+  arr[0] = (v = parseInt(uuid.slice(0, 8), 16)) >>> 24;
+  arr[1] = v >>> 16 & 0xff;
+  arr[2] = v >>> 8 & 0xff;
+  arr[3] = v & 0xff; // Parse ........-####-....-....-............
+
+  arr[4] = (v = parseInt(uuid.slice(9, 13), 16)) >>> 8;
+  arr[5] = v & 0xff; // Parse ........-....-####-....-............
+
+  arr[6] = (v = parseInt(uuid.slice(14, 18), 16)) >>> 8;
+  arr[7] = v & 0xff; // Parse ........-....-....-####-............
+
+  arr[8] = (v = parseInt(uuid.slice(19, 23), 16)) >>> 8;
+  arr[9] = v & 0xff; // Parse ........-....-....-....-############
+  // (Use "/" to avoid 32-bit truncation when bit-shifting high-order bytes)
+
+  arr[10] = (v = parseInt(uuid.slice(24, 36), 16)) / 0x10000000000 & 0xff;
+  arr[11] = v / 0x100000000 & 0xff;
+  arr[12] = v >>> 24 & 0xff;
+  arr[13] = v >>> 16 & 0xff;
+  arr[14] = v >>> 8 & 0xff;
+  arr[15] = v & 0xff;
+  return arr;
+}
+
+var _default = parse;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 814:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+var _default = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 807:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = rng;
+
+var _crypto = _interopRequireDefault(__nccwpck_require__(6113));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+const rnds8Pool = new Uint8Array(256); // # of random values to pre-allocate
+
+let poolPtr = rnds8Pool.length;
+
+function rng() {
+  if (poolPtr > rnds8Pool.length - 16) {
+    _crypto.default.randomFillSync(rnds8Pool);
+
+    poolPtr = 0;
+  }
+
+  return rnds8Pool.slice(poolPtr, poolPtr += 16);
+}
+
+/***/ }),
+
+/***/ 5274:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _crypto = _interopRequireDefault(__nccwpck_require__(6113));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function sha1(bytes) {
+  if (Array.isArray(bytes)) {
+    bytes = Buffer.from(bytes);
+  } else if (typeof bytes === 'string') {
+    bytes = Buffer.from(bytes, 'utf8');
+  }
+
+  return _crypto.default.createHash('sha1').update(bytes).digest();
+}
+
+var _default = sha1;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 8950:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _validate = _interopRequireDefault(__nccwpck_require__(6900));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+/**
+ * Convert array of 16 byte values to UUID string format of the form:
+ * XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+ */
+const byteToHex = [];
+
+for (let i = 0; i < 256; ++i) {
+  byteToHex.push((i + 0x100).toString(16).substr(1));
+}
+
+function stringify(arr, offset = 0) {
+  // Note: Be careful editing this code!  It's been tuned for performance
+  // and works in ways you may not expect. See https://github.com/uuidjs/uuid/pull/434
+  const uuid = (byteToHex[arr[offset + 0]] + byteToHex[arr[offset + 1]] + byteToHex[arr[offset + 2]] + byteToHex[arr[offset + 3]] + '-' + byteToHex[arr[offset + 4]] + byteToHex[arr[offset + 5]] + '-' + byteToHex[arr[offset + 6]] + byteToHex[arr[offset + 7]] + '-' + byteToHex[arr[offset + 8]] + byteToHex[arr[offset + 9]] + '-' + byteToHex[arr[offset + 10]] + byteToHex[arr[offset + 11]] + byteToHex[arr[offset + 12]] + byteToHex[arr[offset + 13]] + byteToHex[arr[offset + 14]] + byteToHex[arr[offset + 15]]).toLowerCase(); // Consistency check for valid UUID.  If this throws, it's likely due to one
+  // of the following:
+  // - One or more input array values don't map to a hex octet (leading to
+  // "undefined" in the uuid)
+  // - Invalid input values for the RFC `version` or `variant` fields
+
+  if (!(0, _validate.default)(uuid)) {
+    throw TypeError('Stringified UUID is invalid');
+  }
+
+  return uuid;
+}
+
+var _default = stringify;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 8628:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _rng = _interopRequireDefault(__nccwpck_require__(807));
+
+var _stringify = _interopRequireDefault(__nccwpck_require__(8950));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+// **`v1()` - Generate time-based UUID**
+//
+// Inspired by https://github.com/LiosK/UUID.js
+// and http://docs.python.org/library/uuid.html
+let _nodeId;
+
+let _clockseq; // Previous uuid creation time
+
+
+let _lastMSecs = 0;
+let _lastNSecs = 0; // See https://github.com/uuidjs/uuid for API details
+
+function v1(options, buf, offset) {
+  let i = buf && offset || 0;
+  const b = buf || new Array(16);
+  options = options || {};
+  let node = options.node || _nodeId;
+  let clockseq = options.clockseq !== undefined ? options.clockseq : _clockseq; // node and clockseq need to be initialized to random values if they're not
+  // specified.  We do this lazily to minimize issues related to insufficient
+  // system entropy.  See #189
+
+  if (node == null || clockseq == null) {
+    const seedBytes = options.random || (options.rng || _rng.default)();
+
+    if (node == null) {
+      // Per 4.5, create and 48-bit node id, (47 random bits + multicast bit = 1)
+      node = _nodeId = [seedBytes[0] | 0x01, seedBytes[1], seedBytes[2], seedBytes[3], seedBytes[4], seedBytes[5]];
+    }
+
+    if (clockseq == null) {
+      // Per 4.2.2, randomize (14 bit) clockseq
+      clockseq = _clockseq = (seedBytes[6] << 8 | seedBytes[7]) & 0x3fff;
+    }
+  } // UUID timestamps are 100 nano-second units since the Gregorian epoch,
+  // (1582-10-15 00:00).  JSNumbers aren't precise enough for this, so
+  // time is handled internally as 'msecs' (integer milliseconds) and 'nsecs'
+  // (100-nanoseconds offset from msecs) since unix epoch, 1970-01-01 00:00.
+
+
+  let msecs = options.msecs !== undefined ? options.msecs : Date.now(); // Per 4.2.1.2, use count of uuid's generated during the current clock
+  // cycle to simulate higher resolution clock
+
+  let nsecs = options.nsecs !== undefined ? options.nsecs : _lastNSecs + 1; // Time since last uuid creation (in msecs)
+
+  const dt = msecs - _lastMSecs + (nsecs - _lastNSecs) / 10000; // Per 4.2.1.2, Bump clockseq on clock regression
+
+  if (dt < 0 && options.clockseq === undefined) {
+    clockseq = clockseq + 1 & 0x3fff;
+  } // Reset nsecs if clock regresses (new clockseq) or we've moved onto a new
+  // time interval
+
+
+  if ((dt < 0 || msecs > _lastMSecs) && options.nsecs === undefined) {
+    nsecs = 0;
+  } // Per 4.2.1.2 Throw error if too many uuids are requested
+
+
+  if (nsecs >= 10000) {
+    throw new Error("uuid.v1(): Can't create more than 10M uuids/sec");
+  }
+
+  _lastMSecs = msecs;
+  _lastNSecs = nsecs;
+  _clockseq = clockseq; // Per 4.1.4 - Convert from unix epoch to Gregorian epoch
+
+  msecs += 12219292800000; // `time_low`
+
+  const tl = ((msecs & 0xfffffff) * 10000 + nsecs) % 0x100000000;
+  b[i++] = tl >>> 24 & 0xff;
+  b[i++] = tl >>> 16 & 0xff;
+  b[i++] = tl >>> 8 & 0xff;
+  b[i++] = tl & 0xff; // `time_mid`
+
+  const tmh = msecs / 0x100000000 * 10000 & 0xfffffff;
+  b[i++] = tmh >>> 8 & 0xff;
+  b[i++] = tmh & 0xff; // `time_high_and_version`
+
+  b[i++] = tmh >>> 24 & 0xf | 0x10; // include version
+
+  b[i++] = tmh >>> 16 & 0xff; // `clock_seq_hi_and_reserved` (Per 4.2.2 - include variant)
+
+  b[i++] = clockseq >>> 8 | 0x80; // `clock_seq_low`
+
+  b[i++] = clockseq & 0xff; // `node`
+
+  for (let n = 0; n < 6; ++n) {
+    b[i + n] = node[n];
+  }
+
+  return buf || (0, _stringify.default)(b);
+}
+
+var _default = v1;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 6409:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _v = _interopRequireDefault(__nccwpck_require__(5998));
+
+var _md = _interopRequireDefault(__nccwpck_require__(4569));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+const v3 = (0, _v.default)('v3', 0x30, _md.default);
+var _default = v3;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 5998:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = _default;
+exports.URL = exports.DNS = void 0;
+
+var _stringify = _interopRequireDefault(__nccwpck_require__(8950));
+
+var _parse = _interopRequireDefault(__nccwpck_require__(2746));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function stringToBytes(str) {
+  str = unescape(encodeURIComponent(str)); // UTF8 escape
+
+  const bytes = [];
+
+  for (let i = 0; i < str.length; ++i) {
+    bytes.push(str.charCodeAt(i));
+  }
+
+  return bytes;
+}
+
+const DNS = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+exports.DNS = DNS;
+const URL = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
+exports.URL = URL;
+
+function _default(name, version, hashfunc) {
+  function generateUUID(value, namespace, buf, offset) {
+    if (typeof value === 'string') {
+      value = stringToBytes(value);
+    }
+
+    if (typeof namespace === 'string') {
+      namespace = (0, _parse.default)(namespace);
+    }
+
+    if (namespace.length !== 16) {
+      throw TypeError('Namespace must be array-like (16 iterable integer values, 0-255)');
+    } // Compute hash of namespace and value, Per 4.3
+    // Future: Use spread syntax when supported on all platforms, e.g. `bytes =
+    // hashfunc([...namespace, ... value])`
+
+
+    let bytes = new Uint8Array(16 + value.length);
+    bytes.set(namespace);
+    bytes.set(value, namespace.length);
+    bytes = hashfunc(bytes);
+    bytes[6] = bytes[6] & 0x0f | version;
+    bytes[8] = bytes[8] & 0x3f | 0x80;
+
+    if (buf) {
+      offset = offset || 0;
+
+      for (let i = 0; i < 16; ++i) {
+        buf[offset + i] = bytes[i];
+      }
+
+      return buf;
+    }
+
+    return (0, _stringify.default)(bytes);
+  } // Function#name is not settable on some platforms (#270)
+
+
+  try {
+    generateUUID.name = name; // eslint-disable-next-line no-empty
+  } catch (err) {} // For CommonJS default export support
+
+
+  generateUUID.DNS = DNS;
+  generateUUID.URL = URL;
+  return generateUUID;
+}
+
+/***/ }),
+
+/***/ 5122:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _rng = _interopRequireDefault(__nccwpck_require__(807));
+
+var _stringify = _interopRequireDefault(__nccwpck_require__(8950));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function v4(options, buf, offset) {
+  options = options || {};
+
+  const rnds = options.random || (options.rng || _rng.default)(); // Per 4.4, set bits for version and `clock_seq_hi_and_reserved`
+
+
+  rnds[6] = rnds[6] & 0x0f | 0x40;
+  rnds[8] = rnds[8] & 0x3f | 0x80; // Copy bytes to buffer, if provided
+
+  if (buf) {
+    offset = offset || 0;
+
+    for (let i = 0; i < 16; ++i) {
+      buf[offset + i] = rnds[i];
+    }
+
+    return buf;
+  }
+
+  return (0, _stringify.default)(rnds);
+}
+
+var _default = v4;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 9120:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _v = _interopRequireDefault(__nccwpck_require__(5998));
+
+var _sha = _interopRequireDefault(__nccwpck_require__(5274));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+const v5 = (0, _v.default)('v5', 0x50, _sha.default);
+var _default = v5;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 6900:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _regex = _interopRequireDefault(__nccwpck_require__(814));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function validate(uuid) {
+  return typeof uuid === 'string' && _regex.default.test(uuid);
+}
+
+var _default = validate;
+exports["default"] = _default;
+
+/***/ }),
+
+/***/ 1595:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", ({
+  value: true
+}));
+exports["default"] = void 0;
+
+var _validate = _interopRequireDefault(__nccwpck_require__(6900));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function version(uuid) {
+  if (!(0, _validate.default)(uuid)) {
+    throw TypeError('Invalid UUID');
+  }
+
+  return parseInt(uuid.substr(14, 1), 16);
+}
+
+var _default = version;
+exports["default"] = _default;
+
+/***/ }),
+
 /***/ 5075:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -4242,7 +3040,11 @@ exports.debug = debug; // for test
 
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
-    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
 }) : (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
@@ -4270,18 +3072,12 @@ var __classPrivateFieldSet = (this && this.__classPrivateFieldSet) || function (
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
     return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 var _Summary_buffer;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(2186));
 // import * as github from '@actions/github'
 const fs = __importStar(__nccwpck_require__(3292));
-const tap_parser_1 = __importDefault(__nccwpck_require__(736));
-function assertNever(value, message) {
-    throw new Error(`${message}: ${value}`);
-}
+const tap_parser_1 = __nccwpck_require__(4537);
 function stripPrefixes(str) {
     if (str.startsWith('● ') || str.startsWith('- ')) {
         return str.substring(2);
@@ -4353,7 +3149,7 @@ async function main() {
     const tapPaths = core.getInput('tap-paths');
     // MSED - consider using @actions/glob to convert tapPaths wildcards to useful information
     const tapData = await fs.readFile(tapPaths, { encoding: 'utf8' });
-    const tapEvents = tap_parser_1.default.parse(tapData);
+    const tapEvents = tap_parser_1.Parser.parse(tapData);
     let ok = false;
     for (const tapEvent of tapEvents) {
         switch (tapEvent[0]) {
@@ -4382,6 +3178,12 @@ async function main() {
                 if (!tapEvent[1].ok) {
                     summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4);
                     if (version === 13) {
+                        if (tapEvent[1].diag?.message) {
+                            extra += stripPrefixes(tapEvent[1].diag.message.trim()) + '\n';
+                        }
+                        if (tapEvent[1].diag?.stack) {
+                            extra += stripPrefixes(tapEvent[1].diag.stack.trim()) + '\n';
+                        }
                         for (const err of tapEvent[1].diag?.errors ?? []) {
                             if (err.errMsg) {
                                 extra += stripPrefixes(err.errMsg.trim()) + '\n';
@@ -4398,9 +3200,11 @@ async function main() {
             case 'comment':
             case 'plan':
             case 'complete':
+            case 'close':
+            case 'finish':
                 break;
             default:
-                assertNever(tapEvent[0], `Unknown tap event`);
+                throw new Error(`${tapEvent[0]}: Unknown tap event`);
         }
     }
     await summary.write();
@@ -4420,6 +3224,14 @@ main().catch((e) => core.setFailed(e.message));
 
 "use strict";
 module.exports = require("assert");
+
+/***/ }),
+
+/***/ 6113:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("crypto");
 
 /***/ }),
 
@@ -4495,22 +3307,6 @@ module.exports = require("path");
 
 /***/ }),
 
-/***/ 2781:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("stream");
-
-/***/ }),
-
-/***/ 1576:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("string_decoder");
-
-/***/ }),
-
 /***/ 4404:
 /***/ ((module) => {
 
@@ -4524,6 +3320,1257 @@ module.exports = require("tls");
 
 "use strict";
 module.exports = require("util");
+
+/***/ }),
+
+/***/ 9119:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SPACE_OPEN_BRACE_EOL = exports.OPEN_BRACE_EOL = void 0;
+// this isn't for performance or anything, it just confuses vim's
+// brace-matching to have these in the middle of functions, and
+// i'm too lazy to dig into vim-javascript to fix it.
+exports.OPEN_BRACE_EOL = /\{\s*$/;
+exports.SPACE_OPEN_BRACE_EOL = / \{$/;
+//# sourceMappingURL=brace-patterns.js.map
+
+/***/ }),
+
+/***/ 595:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.unesc = exports.esc = void 0;
+// turn \ into \\ and # into \#, for stringifying back to TAP
+const esc = (str) => str.replace(/\\/g, '\\\\').replace(/#/g, '\\#').trim();
+exports.esc = esc;
+const unesc = (str) => str
+    .replace(/(\\\\)/g, '\u0000')
+    .replace(/\\#/g, '#')
+    .replace(/\u0000/g, '\\')
+    .trim();
+exports.unesc = unesc;
+//# sourceMappingURL=escape.js.map
+
+/***/ }),
+
+/***/ 7607:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FinalPlan = void 0;
+class FinalPlan {
+    constructor(skipAll, self) {
+        this.start = self.planStart === -1 ? null : self.planStart;
+        this.end = self.planStart === -1 ? null : self.planEnd;
+        this.skipAll = skipAll;
+        this.skipReason = skipAll ? self.planComment : '';
+        this.comment = self.planComment || '';
+    }
+}
+exports.FinalPlan = FinalPlan;
+//# sourceMappingURL=final-plan.js.map
+
+/***/ }),
+
+/***/ 2538:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FinalResults = void 0;
+const final_plan_js_1 = __nccwpck_require__(7607);
+class FinalResults {
+    constructor(skipAll, self) {
+        this.ok = self.ok;
+        this.count = self.count;
+        this.pass = self.pass;
+        this.fail = self.fail || 0;
+        this.bailout = self.bailedOut || false;
+        this.todo = self.todo || 0;
+        this.skip = skipAll ? self.count : self.skip || 0;
+        this.plan = new final_plan_js_1.FinalPlan(skipAll, self);
+        this.failures = self.failures;
+        this.time = self.time;
+        if (self.passes)
+            this.passes = self.passes;
+    }
+}
+exports.FinalResults = FinalResults;
+//# sourceMappingURL=final-results.js.map
+
+/***/ }),
+
+/***/ 4537:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Parser = exports.Result = exports.Plan = exports.parseDirective = exports.lineTypes = exports.lineType = exports.FinalResults = void 0;
+const events_1 = __nccwpck_require__(2361);
+const tap_yaml_1 = __importDefault(__nccwpck_require__(4723));
+const final_results_js_1 = __nccwpck_require__(2538);
+const line_type_js_1 = __nccwpck_require__(281);
+const parse_directive_js_1 = __nccwpck_require__(3842);
+const plan_js_1 = __nccwpck_require__(858);
+const result_js_1 = __nccwpck_require__(6489);
+var final_results_js_2 = __nccwpck_require__(2538);
+Object.defineProperty(exports, "FinalResults", ({ enumerable: true, get: function () { return final_results_js_2.FinalResults; } }));
+var line_type_js_2 = __nccwpck_require__(281);
+Object.defineProperty(exports, "lineType", ({ enumerable: true, get: function () { return line_type_js_2.lineType; } }));
+Object.defineProperty(exports, "lineTypes", ({ enumerable: true, get: function () { return line_type_js_2.lineTypes; } }));
+var parse_directive_js_2 = __nccwpck_require__(3842);
+Object.defineProperty(exports, "parseDirective", ({ enumerable: true, get: function () { return parse_directive_js_2.parseDirective; } }));
+var plan_js_2 = __nccwpck_require__(858);
+Object.defineProperty(exports, "Plan", ({ enumerable: true, get: function () { return plan_js_2.Plan; } }));
+var result_js_2 = __nccwpck_require__(6489);
+Object.defineProperty(exports, "Result", ({ enumerable: true, get: function () { return result_js_2.Result; } }));
+const statics_js_1 = __nccwpck_require__(5970);
+const escape_js_1 = __nccwpck_require__(595);
+class Parser extends events_1.EventEmitter {
+    constructor(options, onComplete) {
+        if (typeof options === 'function') {
+            onComplete = options;
+            options = {};
+        }
+        options = options || {};
+        super();
+        this.child = null;
+        this.current = null;
+        this.extraQueue = [];
+        this.maybeChild = null;
+        this.postPlan = false;
+        this.previousChild = null;
+        this.yamlish = '';
+        this.yind = '';
+        this.aborted = false;
+        this.bail = false;
+        this.bailedOut = false;
+        this.bailingOut = false;
+        this.braceLevel = 0;
+        this.buffer = '';
+        this.closingTestPoint = null;
+        this.comments = [];
+        this.count = 0;
+        this.fail = 0;
+        this.failures = [];
+        this.ok = true;
+        this.parent = null;
+        this.pass = 0;
+        this.planComment = '';
+        this.planEnd = -1;
+        this.planStart = -1;
+        this.pointsSeen = new Map();
+        this.readable = false;
+        this.writable = true;
+        this.results = null;
+        this.skip = 0;
+        this.syntheticBailout = false;
+        this.syntheticPlan = false;
+        this.time = null;
+        this.todo = 0;
+        if (onComplete)
+            this.on('complete', onComplete);
+        this.name = options.name || '';
+        this.parent = options.parent || null;
+        this.closingTestPoint = (this.parent && options.closingTestPoint) || null;
+        this.root = options.parent ? options.parent.root : this;
+        this.passes = options.passes ? [] : null;
+        this.level = options.level || 0;
+        this.bail = !!options.bail;
+        this.omitVersion = !!options.omitVersion;
+        this.buffered = !!options.buffered;
+        this.preserveWhitespace = options.preserveWhitespace || false;
+        this.strict = !!options.strict;
+        this.pragmas = { strict: this.strict };
+    }
+    get fullname() {
+        return ((this.parent ? this.parent.fullname + ' ' : '') + (this.name || '')).trim();
+    }
+    tapError(error, line) {
+        if (line)
+            this.emit('line', line);
+        this.ok = false;
+        this.fail++;
+        if (typeof error === 'string') {
+            error = {
+                tapError: error,
+            };
+        }
+        this.failures.push(error);
+    }
+    parseTestPoint(testPoint, line) {
+        // need to hold off on this when we have a child so we can
+        // associate the closing test point with the test.
+        if (!this.child)
+            this.emitResult();
+        if (this.bailedOut)
+            return;
+        const resId = testPoint[2];
+        const res = new result_js_1.Result(testPoint);
+        if (resId && this.planStart !== -1) {
+            const lessThanStart = res.id < this.planStart;
+            const greaterThanEnd = res.id > this.planEnd;
+            if (lessThanStart || greaterThanEnd) {
+                if (lessThanStart)
+                    res.tapError = 'id less than plan start';
+                else
+                    res.tapError = 'id greater than plan end';
+                res.plan = new plan_js_1.Plan(this.planStart, this.planEnd);
+                this.tapError(res, line);
+            }
+        }
+        if (resId && this.pointsSeen.has(res.id)) {
+            res.tapError = 'test point id ' + resId + ' appears multiple times';
+            /* c8 ignore start */
+            res.previous = this.pointsSeen.get(res.id) || null;
+            /* c8 ignore stop */
+            this.tapError(res, line);
+        }
+        else if (resId) {
+            this.pointsSeen.set(res.id, res);
+        }
+        if (this.child) {
+            if (!this.child.closingTestPoint)
+                this.child.closingTestPoint = res;
+            this.emitResult();
+            // can only bail out here in the case of a child with broken diags
+            // anything else would have bailed out already.
+            if (this.bailedOut)
+                return;
+        }
+        this.emit('line', line);
+        if (!res.skip && !res.todo)
+            this.ok = this.ok && res.ok;
+        // hold onto it, because we might get yamlish diagnostics
+        this.current = res;
+    }
+    nonTap(data, didLine = false) {
+        if (this.bailingOut && /^( {4})*\}\n$/.test(data))
+            return;
+        if (this.strict) {
+            const err = {
+                tapError: 'Non-TAP data encountered in strict mode',
+                data: data,
+            };
+            this.tapError(err, data);
+            if (this.parent)
+                this.parent.tapError(err, data);
+        }
+        // emit each line, then the extra as a whole
+        if (!didLine)
+            data
+                .split('\n')
+                .slice(0, -1)
+                .forEach(line => {
+                line += '\n';
+                if (this.current || this.extraQueue.length)
+                    this.extraQueue.push(['line', line]);
+                else
+                    this.emit('line', line);
+            });
+        this.emitExtra(data);
+    }
+    emitExtra(data, fromChild = false) {
+        if (this.parent)
+            this.parent.emitExtra(data.replace(/\n$/, '').replace(/^/gm, '    ') + '\n', true);
+        else if (!fromChild && (this.current || this.extraQueue.length))
+            this.extraQueue.push(['extra', data]);
+        else
+            this.emit('extra', data);
+    }
+    plan(start, end, comment, line) {
+        // not allowed to have more than one plan
+        if (this.planStart !== -1) {
+            this.nonTap(line);
+            return;
+        }
+        // can't put a plan in a child.
+        if (this.child || this.yind) {
+            this.nonTap(line);
+            return;
+        }
+        this.emitResult();
+        if (this.bailedOut)
+            return;
+        // 1..0 is a special case. Otherwise, end must be >= start
+        if (end < start && end !== 0 && start !== 1) {
+            if (this.strict)
+                this.tapError({
+                    tapError: 'plan end cannot be less than plan start',
+                    plan: { start, end },
+                }, line);
+            else
+                this.nonTap(line);
+            return;
+        }
+        this.planStart = start;
+        this.planEnd = end;
+        const p = new plan_js_1.Plan(start, end, comment);
+        if (p.comment)
+            this.planComment = p.comment = comment;
+        // This means that the plan is coming at the END of all the tests
+        // Plans MUST be either at the beginning or the very end.  We treat
+        // plans like '1..0' the same, since they indicate that no tests
+        // will be coming.
+        if (this.count !== 0 || this.planEnd === 0) {
+            const seen = new Set();
+            for (const [id, res] of this.pointsSeen.entries()) {
+                const tapError = id < start
+                    ? 'id less than plan start'
+                    : id > end
+                        ? 'id greater than plan end'
+                        : null;
+                if (tapError) {
+                    seen.add(tapError);
+                    res.tapError = tapError;
+                    res.plan = new plan_js_1.Plan(start, end);
+                    this.tapError(res, line);
+                }
+            }
+            this.postPlan = true;
+        }
+        this.emit('line', line);
+        this.emit('plan', p);
+    }
+    resetYamlish() {
+        this.yind = '';
+        this.yamlish = '';
+    }
+    // that moment when you realize it's not what you thought it was
+    yamlGarbage() {
+        const yamlGarbage = this.yind + '---\n' + this.yamlish;
+        this.emitResult();
+        if (this.bailedOut)
+            return;
+        this.nonTap(yamlGarbage, true);
+    }
+    yamlishLine(line) {
+        if (line === this.yind + '...\n') {
+            // end the yaml block
+            this.processYamlish();
+        }
+        else {
+            this.yamlish += line;
+        }
+    }
+    processYamlish() {
+        /* c8 ignore start */
+        if (!this.current) {
+            throw new Error('called processYamlish without a current test point');
+        }
+        /* c8 ignore stop */
+        const yamlish = this.yamlish;
+        this.resetYamlish();
+        let diags;
+        try {
+            diags = tap_yaml_1.default.parse(yamlish);
+        }
+        catch (er) {
+            this.nonTap(this.yind + '---\n' + yamlish + this.yind + '...\n', true);
+            return;
+        }
+        this.current.diag = diags;
+        // we still don't emit the result here yet, to support diags
+        // that come ahead of buffered subtests.
+    }
+    write(chunk, encoding, cb) {
+        if (this.aborted) {
+            return false;
+        }
+        if (typeof encoding === 'string' &&
+            encoding !== 'utf8' &&
+            typeof chunk === 'string') {
+            chunk = Buffer.from(chunk, encoding);
+        }
+        if (Buffer.isBuffer(chunk)) {
+            chunk = chunk.toString('utf8');
+        }
+        if (typeof encoding === 'function') {
+            cb = encoding;
+            encoding = undefined;
+        }
+        this.buffer += chunk;
+        do {
+            const match = this.buffer.match(/^.*\r?\n/);
+            if (!match)
+                break;
+            this.buffer = this.buffer.substring(match[0].length);
+            this.parse(match[0]);
+        } while (this.buffer.length);
+        if (cb)
+            process.nextTick(cb);
+        return true;
+    }
+    end(chunk, encoding, cb) {
+        if (chunk && typeof chunk !== 'function') {
+            if (typeof encoding === 'function') {
+                cb = encoding;
+                this.write(chunk);
+            }
+            else {
+                this.write(chunk, encoding);
+            }
+        }
+        if (this.buffer) {
+            this.write('\n');
+        }
+        // if we have yamlish, means we didn't finish with a ...
+        if (this.yamlish)
+            this.yamlGarbage();
+        this.emitResult();
+        if (this.syntheticBailout && this.level === 0) {
+            this.syntheticBailout = false;
+            const reason = this.bailedOut === true ? '' : ' ' + this.bailedOut;
+            this.emit('line', 'Bail out!' + reason + '\n');
+        }
+        let skipAll = false;
+        if (this.planEnd === 0 && this.planStart === 1) {
+            skipAll = true;
+            if (this.count === 0) {
+                this.ok = true;
+            }
+            else {
+                this.tapError('Plan of 1..0, but test points encountered', '');
+            }
+        }
+        else if (!this.bailedOut && this.planStart === -1) {
+            if (this.count === 0 && !this.syntheticPlan) {
+                this.syntheticPlan = true;
+                if (this.buffered) {
+                    this.planStart = 1;
+                    this.planEnd = 0;
+                }
+                else
+                    this.plan(1, 0, 'no tests found', '1..0 # no tests found\n');
+                skipAll = true;
+            }
+            else {
+                this.tapError('no plan', '');
+            }
+        }
+        else if (this.ok && this.count !== this.planEnd - this.planStart + 1) {
+            this.tapError('incorrect number of tests', '');
+        }
+        this.emitComplete(skipAll);
+        if (cb)
+            process.nextTick(cb);
+        return this;
+    }
+    emitComplete(skipAll) {
+        if (!this.results) {
+            const res = (this.results = new final_results_js_1.FinalResults(!!skipAll, this));
+            if (!res.bailout) {
+                // comment a bit at the end so we know what happened.
+                // but don't repeat these comments if they're already present.
+                if (res.plan.end !== res.count)
+                    this.emitComment('test count(' + res.count + ') != plan(' + res.plan.end + ')', false, true);
+                if (res.fail > 0 && !res.ok)
+                    this.emitComment('failed ' +
+                        res.fail +
+                        (res.count > 1 ? ' of ' + res.count + ' tests' : ' test'), false, true);
+                if (res.todo > 0)
+                    this.emitComment('todo: ' + res.todo, false, true);
+                if (res.skip > 0)
+                    this.emitComment('skip: ' + res.skip, false, true);
+            }
+            this.emit('complete', this.results);
+            this.emit('finish');
+            this.emit('close');
+        }
+    }
+    version(version, line) {
+        // If version is specified, must be at the very beginning.
+        if (version >= 13 &&
+            this.planStart === -1 &&
+            this.count === 0 &&
+            !this.current) {
+            this.emit('line', line);
+            this.emit('version', version);
+        }
+        else
+            this.nonTap(line);
+    }
+    pragma(key, value, line) {
+        // can't put a pragma in a child or yaml block
+        if (this.child) {
+            this.nonTap(line);
+            return;
+        }
+        this.emitResult();
+        if (this.bailedOut)
+            return;
+        // only the 'strict' pragma is currently relevant
+        if (key === 'strict') {
+            this.strict = value;
+        }
+        this.pragmas[key] = value;
+        this.emit('line', line);
+        this.emit('pragma', key, value);
+    }
+    bailout(reason, synthetic = false) {
+        this.syntheticBailout = synthetic;
+        if (this.bailingOut)
+            return;
+        // Guard because emitting a result can trigger a forced bailout
+        // if the harness decides that failures should be bailouts.
+        this.bailingOut = reason || true;
+        if (!synthetic)
+            this.emitResult();
+        else
+            this.current = null;
+        this.bailedOut = this.bailingOut;
+        this.ok = false;
+        if (!synthetic) {
+            // synthetic bailouts get emitted on end
+            let line = 'Bail out!';
+            if (reason)
+                line += ' ' + reason;
+            this.emit('line', line + '\n');
+        }
+        this.emit('bailout', reason);
+        if (this.parent) {
+            this.end();
+            this.parent.bailout(reason, true);
+        }
+    }
+    clearExtraQueue() {
+        for (let c = 0; c < this.extraQueue.length; c++) {
+            this.emit(this.extraQueue[c][0], this.extraQueue[c][1]);
+        }
+        this.extraQueue.length = 0;
+    }
+    endChild() {
+        if (this.child && (!this.bailingOut || this.child.count)) {
+            if (this.child.closingTestPoint)
+                this.child.time = this.child.closingTestPoint.time || null;
+            this.previousChild = this.child;
+            this.child.end();
+            this.child = null;
+        }
+    }
+    emitResult() {
+        if (this.bailedOut)
+            return;
+        this.endChild();
+        this.resetYamlish();
+        if (!this.current)
+            return this.clearExtraQueue();
+        const res = this.current;
+        this.current = null;
+        this.count++;
+        if (res.ok) {
+            this.pass++;
+            if (this.passes)
+                this.passes.push(res);
+        }
+        else {
+            this.fail++;
+            if (!res.todo && !res.skip) {
+                this.ok = false;
+                this.failures.push(res);
+            }
+        }
+        if (res.skip)
+            this.skip++;
+        if (res.todo)
+            this.todo++;
+        this.emitAssert(res);
+        if (this.bail && !res.ok && !res.todo && !res.skip && !this.bailingOut) {
+            this.maybeChild = null;
+            const ind = new Array(this.level + 1).join('    ');
+            let p;
+            for (p = this; p.parent; p = p.parent)
+                ;
+            const bailName = res.name ? ' ' + res.name : '';
+            p.parse(ind + 'Bail out!' + bailName + '\n');
+        }
+        this.clearExtraQueue();
+    }
+    // TODO: We COULD say that any "relevant tap" line that's indented
+    // by 4 spaces starts a child test, and just call it 'unnamed' if
+    // it does not have a prefix comment.  In that case, any number of
+    // 4-space indents can be plucked off to try to find a relevant
+    // TAP line type, and if so, start the unnamed child.
+    startChild(line) {
+        const maybeBuffered = this.current && this.current.buffered;
+        const unindentStream = !maybeBuffered && this.maybeChild;
+        const indentStream = !maybeBuffered && !unindentStream && line_type_js_1.lineTypes.subtestIndent.test(line);
+        // If we have any other result waiting in the wings, we need to emit
+        // that now.  A buffered test emits its test point at the *end* of
+        // the child subtest block, so as to match streamed test semantics.
+        if (!maybeBuffered)
+            this.emitResult();
+        if (this.bailedOut)
+            return;
+        this.child = new Parser({
+            bail: this.bail,
+            parent: this,
+            level: this.level + 1,
+            buffered: maybeBuffered || undefined,
+            closingTestPoint: (maybeBuffered && this.current) || undefined,
+            preserveWhitespace: this.preserveWhitespace,
+            omitVersion: true,
+            strict: this.strict,
+        });
+        this.child.on('complete', results => {
+            if (!results.ok)
+                this.ok = false;
+        });
+        this.child.on('line', l => {
+            if (l.trim() || this.preserveWhitespace)
+                l = '    ' + l;
+            this.emit('line', l);
+        });
+        // Canonicalize the parsing result of any kind of subtest
+        // if it's a buffered subtest or a non-indented Subtest directive,
+        // then synthetically emit the Subtest comment
+        line = line.substring(4);
+        let subtestComment;
+        if (indentStream) {
+            subtestComment = line;
+            line = '';
+        }
+        else if (maybeBuffered && this.current) {
+            subtestComment = '# Subtest: ' + this.current.name + '\n';
+        }
+        else {
+            subtestComment = this.maybeChild || '# Subtest\n';
+        }
+        this.maybeChild = null;
+        this.child.name = subtestComment.substring('# Subtest: '.length).trim();
+        // at some point, we may wish to move 100% to preferring
+        // the Subtest comment on the parent level.  If so, uncomment
+        // this line, and remove the child.emitComment below.
+        // this.emit('comment', subtestComment)
+        if (!this.child.buffered)
+            this.emit('line', subtestComment);
+        this.emit('child', this.child);
+        this.child.emitComment(subtestComment, true);
+        if (line)
+            this.child.parse(line);
+    }
+    destroy(er) {
+        this.abort('destroyed', er);
+    }
+    abort(message = '', extra) {
+        if (this.child) {
+            const b = this.child.buffered;
+            this.child.abort(message, extra);
+            extra = null;
+            if (b)
+                this.write('\n}\n');
+        }
+        let dump = '';
+        if (extra && Object.keys(extra).length) {
+            try {
+                dump = tap_yaml_1.default.stringify(extra).trimEnd();
+                /* c8 ignore start */
+            }
+            catch (er) { }
+            /* c8 ignore stop */
+        }
+        const y = dump
+            ? '  ---\n  ' + dump.split('\n').join('\n  ') + '\n  ...\n'
+            : '\n';
+        const n = (this.count || 0) + 1 + (this.current ? 1 : 0);
+        if (this.planEnd !== -1 && this.planEnd < n && this.parent) {
+            // skip it, let the parent do this.
+            this.aborted = true;
+            return;
+        }
+        message = message.replace(/[\n\r\s\t]/g, ' ');
+        let point = '\nnot ok ' + n + ' - ' + message + '\n' + y;
+        if (this.planEnd === -1)
+            point += '1..' + n + '\n';
+        this.write(point);
+        this.aborted = true;
+        this.end();
+    }
+    emitAssert(res) {
+        res.fullname = this.fullname;
+        this.emit('assert', res);
+        // see if we need to surface to the top level
+        const c = this.child || this.previousChild;
+        if (c) {
+            this.previousChild = null;
+            if (res.name === c.name &&
+                c.results &&
+                res.ok === c.results.ok &&
+                c.results.count &&
+                !res.todo &&
+                !res.skip) {
+                // just procedural, ignore it
+                return;
+            }
+        }
+        // surface result to the top level parser
+        this.root.emit('result', res);
+        if (res.skip)
+            this.root.emit('skip', res);
+        else if (res.todo)
+            this.root.emit('todo', res);
+        else if (!res.ok)
+            this.root.emit('fail', res);
+        else
+            this.root.emit('pass', res);
+    }
+    emitComment(line, skipLine = false, noDuplicate = false) {
+        if (line.trim().charAt(0) !== '#')
+            line = '# ' + line;
+        if (line.slice(-1) !== '\n')
+            line += '\n';
+        if (noDuplicate && this.comments.indexOf(line) !== -1)
+            return;
+        this.comments.push(line);
+        const dir = (0, parse_directive_js_1.parseDirective)(line.replace(/^\s*#\s*/, '').trim());
+        if (dir && dir[0] === 'time' && typeof dir[1] === 'number')
+            this.time = dir[1];
+        if (this.current || this.extraQueue.length) {
+            // no way to get here with skipLine being true
+            this.extraQueue.push(['line', line]);
+            this.extraQueue.push(['comment', line]);
+        }
+        else {
+            if (!skipLine)
+                this.emit('line', line);
+            this.emit('comment', line);
+        }
+    }
+    parse(line) {
+        // normalize line endings
+        line = line.replace(/\r\n$/, '\n');
+        // sometimes empty lines get trimmed, but are still part of
+        // a subtest or a yaml block.  Otherwise, nothing to parse!
+        if (line === '\n') {
+            if (this.child)
+                line = '    ' + line;
+            else if (this.yind)
+                line = this.yind + line;
+        }
+        // If we're bailing out, then the only thing we want to see is the
+        // end of a buffered child test.  Anything else should be ignored.
+        // But!  if we're bailing out a nested child, and ANOTHER nested child
+        // comes after that one, then we don't want the second child's } to
+        // also show up, or it looks weird.
+        if (this.bailingOut) {
+            if (!/^\s*}\n$/.test(line))
+                return;
+            else if (!this.braceLevel || line.length < this.braceLevel)
+                this.braceLevel = line.length;
+            else
+                return;
+        }
+        // This allows omitting even parsing the version if the test is
+        // an indented child test.  Several parsers get upset when they
+        // see an indented version field.
+        if (this.omitVersion && line_type_js_1.lineTypes.version.test(line) && !this.yind) {
+            return;
+        }
+        // check to see if the line is indented.
+        // if it is, then it's either a subtest, yaml, or garbage.
+        const indent = line.match(/^[ \t]*/);
+        if (indent && indent[0]) {
+            this.parseIndent(line, indent[0]);
+            return;
+        }
+        // In any case where we're going to emitResult, that can trigger
+        // a bailout, so we need to only emit the line once we know that
+        // isn't happening, to prevent cases where there's a bailout, and
+        // then one more line of output.  That'll also prevent the case
+        // where the test point is emitted AFTER the line that follows it.
+        // buffered subtests must end with a }
+        if (this.child && this.child.buffered && line === '}\n') {
+            this.endChild();
+            this.emit('line', line);
+            this.emitResult();
+            return;
+        }
+        // just a \n, emit only if we care about whitespace
+        const validLine = this.preserveWhitespace || line.trim() || this.yind;
+        if (line === '\n')
+            return validLine && this.emit('line', line);
+        // buffered subtest with diagnostics
+        if (this.current &&
+            line === '{\n' &&
+            this.current.diag &&
+            !this.current.buffered &&
+            !this.child) {
+            this.emit('line', line);
+            this.current.buffered = true;
+            return;
+        }
+        // now we know it's not indented, so if it's either valid tap
+        // or garbage.  Get the type of line.
+        const type = (0, line_type_js_1.lineType)(line);
+        if (!type) {
+            this.nonTap(line);
+            return;
+        }
+        if (type[0] === 'comment') {
+            this.emitComment(line);
+            return;
+        }
+        // if we have any yamlish, it's garbage now.  We tolerate non-TAP and
+        // comments in the midst of yaml (though, perhaps, that's questionable
+        // behavior), but any actual TAP means that the yaml block was just
+        // not valid.
+        if (this.yind)
+            this.yamlGarbage();
+        // If it's anything other than a comment or garbage, then any
+        // maybeChild is just an unsatisfied promise.
+        if (this.maybeChild) {
+            this.emitComment(this.maybeChild);
+            this.maybeChild = null;
+        }
+        // nothing but comments can come after a trailing plan
+        if (this.postPlan) {
+            this.nonTap(line);
+            return;
+        }
+        // ok, now it's maybe a thing
+        if (type[0] === 'bailout') {
+            this.bailout((0, escape_js_1.unesc)(type[1][1].trim()), false);
+            return;
+        }
+        if (type[0] === 'pragma') {
+            const pragma = type[1];
+            this.pragma(pragma[2], pragma[1] === '+', line);
+            return;
+        }
+        if (type[0] === 'version') {
+            const version = type[1];
+            this.version(parseInt(version[1], 10), line);
+            return;
+        }
+        if (type[0] === 'plan') {
+            const plan = type[1];
+            this.plan(+plan[1], +plan[2], (0, escape_js_1.unesc)(plan[3] || '').trim(), line);
+            return;
+        }
+        // streamed subtests will end when this test point is emitted
+        if (type[0] === 'testPoint') {
+            // note: it's weird, but possible, to have a testpoint ending in
+            // { before a streamed subtest which ends with a test point
+            // instead of a }.  In this case, the parser gets confused, but
+            // also, even beginning to handle that means doing a much more
+            // involved multi-line parse.  By that point, the subtest block
+            // has already been emitted as a 'child' event, so it's too late
+            // to really do the optimal thing.  The only way around would be
+            // to buffer up everything and do a multi-line parse.  This is
+            // rare and weird, and a multi-line parse would be a bigger
+            // rewrite, so I'm allowing it as it currently is.
+            this.parseTestPoint(type[1], line);
+            return;
+        }
+        // We already detected nontap up above, so the only case left
+        // should be a `# Subtest:` comment.  Ignore for coverage, but
+        // include the error here just for good measure.
+        if (type[0] === 'subtest') {
+            // this is potentially a subtest.  Not indented.
+            // hold until later.
+            this.maybeChild = line;
+            /* c8 ignore start */
+        }
+        else {
+            throw new Error('Unhandled case: ' + type[0]);
+        }
+        /* c8 ignore stop */
+    }
+    parseIndent(line, indent) {
+        // still belongs to the child, so pass it along.
+        if (this.child && line.substring(0, 4) === '    ') {
+            line = line.substring(4);
+            this.child.write(line);
+            return;
+        }
+        // one of:
+        // - continuing yaml block
+        // - starting yaml block
+        // - ending yaml block
+        // - body of a new child subtest that was previously introduced
+        // - An indented subtest directive
+        // - A comment, or garbage
+        // continuing/ending yaml block
+        if (this.yind) {
+            if (line.indexOf(this.yind) === 0) {
+                this.emit('line', line);
+                this.yamlishLine(line);
+                return;
+            }
+            else {
+                // oops!  that was not actually yamlish, I guess.
+                // this is a case where the indent is shortened mid-yamlish block
+                // treat existing yaml as garbage, continue parsing this line
+                this.yamlGarbage();
+            }
+        }
+        // start a yaml block under a test point
+        if (this.current && !this.yind && line === indent + '---\n') {
+            this.yind = indent;
+            this.emit('line', line);
+            return;
+        }
+        // at this point, not yamlish, and not an existing child test.
+        // We may have already seen an unindented Subtest directive, or
+        // a test point that ended in { indicating a buffered subtest
+        // Child tests are always indented 4 spaces.
+        if (line.substring(0, 4) === '    ') {
+            if (this.maybeChild ||
+                (this.current && this.current.buffered) ||
+                line_type_js_1.lineTypes.subtestIndent.test(line)) {
+                this.startChild(line);
+                return;
+            }
+            // It's _something_ indented, if the indentation is divisible by
+            // 4 spaces, and the result is actual TAP of some sort, then do
+            // a child subtest for it as well.
+            //
+            // This will lead to some ambiguity in cases where there are multiple
+            // levels of non-signaled subtests, but a Subtest comment in the
+            // middle of them, which may or may not be considered "indented"
+            // See the subtest-no-comment-mid-comment fixture for an example
+            // of this.  As it happens, the preference is towards an indented
+            // Subtest comment as the interpretation, which is the only possible
+            // way to resolve this, since otherwise there's no way to distinguish
+            // between an anonymous subtest with a non-indented Subtest comment,
+            // and an indented Subtest comment.
+            const s = line.match(/( {4})+(.*\n)$/);
+            if (s && s[2].charAt(0) !== ' ') {
+                // integer number of indentations.
+                const type = (0, line_type_js_1.lineType)(s[2]);
+                if (type) {
+                    if (type[0] === 'comment') {
+                        this.emit('line', line);
+                        this.emitComment(line);
+                    }
+                    else {
+                        // it's relevant!  start as an "unnamed" child subtest
+                        this.startChild(line);
+                    }
+                    return;
+                }
+            }
+        }
+        // at this point, it's either a non-subtest comment, or garbage.
+        if (line_type_js_1.lineTypes.comment.test(line)) {
+            this.emitComment(line);
+            return;
+        }
+        this.nonTap(line);
+    }
+    static parse(str, options = {}) {
+        return (0, statics_js_1.parse)(str, options);
+    }
+    static stringify(msg, options = {}) {
+        return (0, statics_js_1.stringify)(msg, options);
+    }
+}
+exports.Parser = Parser;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 281:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.lineType = exports.lineTypes = void 0;
+exports.lineTypes = {
+    testPoint: /^(not )?ok(?: ([0-9]+))?(?:(?: -)?( .*?))?(\{?)\n$/,
+    pragma: /^pragma ([+-])([a-zA-Z0-9_-]+)\n$/,
+    bailout: /^bail out!(.*)\n$/i,
+    version: /^TAP version ([0-9]+)\n$/i,
+    childVersion: /^(    )+TAP version ([0-9]+)\n$/i,
+    plan: /^([0-9]+)\.\.([0-9]+)(?:\s+(?:#\s*(.*)))?\n$/,
+    subtest: /^# Subtest(?:: (.*))?\n$/,
+    subtestIndent: /^    # Subtest(?:: (.*))?\n$/,
+    comment: /^\s*#.*\n$/,
+};
+const lineType = (line) => {
+    for (let t in exports.lineTypes) {
+        const match = line.match(exports.lineTypes[t]);
+        if (match)
+            return [t, match];
+    }
+    return null;
+};
+exports.lineType = lineType;
+//# sourceMappingURL=line-type.js.map
+
+/***/ }),
+
+/***/ 3842:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDirective = void 0;
+const brace_patterns_js_1 = __nccwpck_require__(9119);
+const parseDirective = (line) => {
+    if (!line.trim())
+        return false;
+    line = line.replace(brace_patterns_js_1.OPEN_BRACE_EOL, '').trim();
+    const time = line.match(/^time=((?:[1-9][0-9]*|0)(?:\.[0-9]+)?)(ms|s)$/i);
+    if (time) {
+        let n = +time[1];
+        if (time[2] === 's') {
+            // JS does weird things with floats.  Round it off a bit.
+            n *= 1000000;
+            n = Math.round(n);
+            n /= 1000;
+        }
+        return ['time', n];
+    }
+    const type = line.match(/^(todo|skip)(?:\S*)\b(.*)$/i);
+    if (!type)
+        return false;
+    // we know at this point it must be either 'todo' or 'skip',
+    // in unknown upper/lower case
+    return [type[1].toLowerCase(), type[2].trim() || true];
+};
+exports.parseDirective = parseDirective;
+//# sourceMappingURL=parse-directive.js.map
+
+/***/ }),
+
+/***/ 858:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Plan = void 0;
+class Plan {
+    constructor(start, end, comment = '') {
+        this.start = start;
+        this.end = end;
+        this.comment = comment;
+    }
+}
+exports.Plan = Plan;
+//# sourceMappingURL=plan.js.map
+
+/***/ }),
+
+/***/ 6489:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Result = void 0;
+const brace_patterns_js_1 = __nccwpck_require__(9119);
+const parse_directive_js_1 = __nccwpck_require__(3842);
+class Result {
+    constructor(parsed) {
+        this.name = '';
+        this.id = 0;
+        this.buffered = false;
+        this.tapError = null;
+        this.skip = false;
+        this.todo = false;
+        this.previous = null;
+        this.plan = null;
+        this.diag = null;
+        this.time = null;
+        this.fullname = '';
+        const ok = !parsed[1];
+        const id = +(parsed[2] || 0);
+        let buffered = parsed[4];
+        this.ok = ok;
+        if (parsed[2])
+            this.id = id;
+        let rest = parsed[3] || '';
+        let name;
+        // We know at this point the parsed result cannot contain \n,
+        // so we can leverage that as a placeholder.
+        // first, replace any PAIR of \ chars with \n
+        // then, split on any # that is not preceeded by \
+        // the first of these is definitely the description
+        // the rest is the directive, if recognized, otherwise
+        // we just lump it onto the description, but escaped.
+        // then any \n chars in either are turned into \ (just one)
+        // escape \ with \
+        // swap out escaped \ with \n, then swap back
+        rest = rest.replace(/(\\\\)/g, '\n');
+        const [h, ...r] = rest.split(/(?<=\s|^)(?<!\\)#/g);
+        name = (h || '').replace(/\\#/g, '#').replace(/\n/g, '\\');
+        rest = r.join('#').replace(/\\#/g, '#').replace(/\n/g, '\\');
+        // now, let's see if there's a directive in there.
+        const dir = (0, parse_directive_js_1.parseDirective)(rest.trim());
+        if (!dir)
+            name += (rest ? '#' + rest : '') + buffered;
+        else {
+            // handle buffered subtests with todo/skip on them, like
+            // ok 1 - bar # todo foo {\n
+            const dirKey = dir[0];
+            const dirValue = dir[1];
+            if (dirKey === 'todo' || dirKey === 'skip') {
+                this[dirKey] = dirValue;
+            }
+            else {
+                if (dirKey === 'time') {
+                    this.time = parseFloat(dirValue);
+                } /* c8 ignore start */
+                else {
+                }
+                /* c8 ignore stop */
+            }
+        }
+        if (brace_patterns_js_1.OPEN_BRACE_EOL.test(name)) {
+            name = name.replace(brace_patterns_js_1.OPEN_BRACE_EOL, '');
+            buffered = '{';
+        }
+        if (buffered === '{')
+            this.buffered = true;
+        if (name)
+            this.name = name.trim();
+    }
+}
+exports.Result = Result;
+//# sourceMappingURL=result.js.map
+
+/***/ }),
+
+/***/ 5970:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.stringify = exports.parse = void 0;
+const events_to_array_1 = __importDefault(__nccwpck_require__(7315));
+const index_js_1 = __nccwpck_require__(4537);
+const escape_js_1 = __nccwpck_require__(595);
+const tap_yaml_1 = __importDefault(__nccwpck_require__(4723));
+const brace_patterns_js_1 = __nccwpck_require__(9119);
+// used in flattening mode
+const getId = () => {
+    const id = () => id.current++;
+    id.current = 1;
+    return id;
+};
+const parse = (str, options) => {
+    const { flat = false } = options;
+    const ignore = ['line', 'pass', 'fail', 'todo', 'skip', 'result'];
+    if (flat)
+        ignore.push('assert', 'child', 'plan', 'complete');
+    const parser = new index_js_1.Parser(options);
+    const events = (0, events_to_array_1.default)(parser, ignore);
+    if (flat) {
+        const id = getId();
+        parser.on('result', res => {
+            const name = [];
+            if (res.fullname)
+                name.push(res.fullname);
+            if (res.name)
+                name.push(res.name);
+            res.name = name.join(' > ').trim();
+            res.fullname = '';
+            res.id = id();
+            events.push(['assert', res]);
+        });
+        parser.on('complete', res => {
+            if (!res.bailout)
+                events.push(['plan', { end: id.current - 1, start: 1 }]);
+            events.push(['complete', res]);
+        });
+    }
+    parser.end(str);
+    return events;
+};
+exports.parse = parse;
+const stringify = (msg, { flat = false, indent = '', id = getId() }) => {
+    const ind = flat ? '' : indent;
+    return (ind +
+        msg
+            .map(item => {
+            switch (item[0]) {
+                case 'child':
+                    const comment = item[1][0];
+                    const child = item[1].slice(1);
+                    return (index_js_1.Parser.stringify([comment], { flat, indent: '', id }) +
+                        index_js_1.Parser.stringify(child, { flat, indent: '    ', id }));
+                case 'version':
+                    return 'TAP version ' + item[1] + '\n';
+                case 'plan':
+                    if (flat) {
+                        if (indent !== '')
+                            return '';
+                        item[1].start = 1;
+                        item[1].end = id.current - 1;
+                    }
+                    return (item[1].start +
+                        '..' +
+                        item[1].end +
+                        (item[1].comment ? ' # ' + (0, escape_js_1.esc)(item[1].comment) : '') +
+                        '\n');
+                case 'pragma':
+                    return 'pragma ' + (item[2] ? '+' : '-') + item[1] + '\n';
+                case 'bailout':
+                    return 'Bail out!' + (item[1] ? ' ' + (0, escape_js_1.esc)(item[1]) : '') + '\n';
+                case 'assert':
+                    const res = item[1];
+                    if (flat) {
+                        res.id = id();
+                        const name = [];
+                        if (res.fullname)
+                            name.push(res.fullname);
+                        if (res.name)
+                            name.push(res.name);
+                        res.name = name.join(' > ').trim();
+                    }
+                    return ((res.ok ? '' : 'not ') +
+                        'ok' +
+                        (res.id ? ' ' + res.id : '') +
+                        (res.name
+                            ? ' - ' + (0, escape_js_1.esc)(res.name).replace(brace_patterns_js_1.SPACE_OPEN_BRACE_EOL, '')
+                            : '') +
+                        (res.skip
+                            ? ' # SKIP' + (res.skip === true ? '' : ' ' + (0, escape_js_1.esc)(res.skip))
+                            : '') +
+                        (res.todo
+                            ? ' # TODO' + (res.todo === true ? '' : ' ' + (0, escape_js_1.esc)(res.todo))
+                            : '') +
+                        (res.time ? ' # time=' + res.time + 'ms' : '') +
+                        '\n' +
+                        (res.diag
+                            ? '  ---\n  ' +
+                                tap_yaml_1.default.stringify(res.diag).split('\n').join('\n  ').trim() +
+                                '\n  ...\n'
+                            : ''));
+                case 'extra':
+                case 'comment':
+                    return item[1];
+            }
+        })
+            .join('')
+            .split('\n')
+            .join('\n' + ind)
+            .trim() +
+        '\n');
+};
+exports.stringify = stringify;
+//# sourceMappingURL=statics.js.map
 
 /***/ }),
 
