@@ -3151,10 +3151,12 @@ async function main() {
     const tapData = await fs.readFile(tapPaths, { encoding: 'utf8' });
     const tapEvents = tap_parser_1.Parser.parse(tapData);
     let ok = false;
+    let count = 0;
     for (const tapEvent of tapEvents) {
         switch (tapEvent[0]) {
             case 'complete':
                 ok = tapEvent[1].ok;
+                count = tapEvent[1].count;
                 summary.addHeading(`${title ? `${title}: ` : ''}${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${tapEvent[1].fail} failed.`);
                 break;
             case 'version':
@@ -3212,6 +3214,9 @@ async function main() {
     // console.log(`The event payload: ${payload}`)
     if (!ok) {
         core.setFailed(`❌ Tests reported failures`);
+    }
+    if (count === 0) {
+        core.setFailed(`❌ No tests found in the report`);
     }
 }
 main().catch((e) => core.setFailed(e.message));
@@ -3500,6 +3505,7 @@ class Parser extends events_1.EventEmitter {
         return ((this.parent ? this.parent.fullname + ' ' : '') + (this.name || '')).trim();
     }
     tapError(error, line) {
+        console.error('tapError', error, line)
         if (line)
             this.emit('line', line);
         this.ok = false;
@@ -3877,6 +3883,7 @@ class Parser extends events_1.EventEmitter {
                 this.passes.push(res);
         }
         else {
+            console.error('emitResult', 'fail')
             this.fail++;
             if (!res.todo && !res.skip) {
                 this.ok = false;

@@ -87,10 +87,12 @@ async function main() {
   const tapEvents = TapParser.parse(tapData)
 
   let ok = false
+  let count = 0
   for (const tapEvent of tapEvents) {
     switch (tapEvent[0]) {
       case 'complete':
         ok = tapEvent[1].ok
+        count = tapEvent[1].count
         summary.addHeading(
           `${title ? `${title}: ` : ''}${tapEvent[1].count} run, ${tapEvent[1].skip} skipped, ${
             tapEvent[1].fail
@@ -157,6 +159,9 @@ async function main() {
 
   if (!ok) {
     core.setFailed(`❌ Tests reported failures`)
+  }
+  if (count === 0) {
+    core.setFailed(`❌ No tests found in the report`)
   }
 }
 
