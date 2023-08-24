@@ -3505,7 +3505,6 @@ class Parser extends events_1.EventEmitter {
         return ((this.parent ? this.parent.fullname + ' ' : '') + (this.name || '')).trim();
     }
     tapError(error, line) {
-        console.error('tapError', error, line)
         if (line)
             this.emit('line', line);
         this.ok = false;
@@ -3883,7 +3882,6 @@ class Parser extends events_1.EventEmitter {
                 this.passes.push(res);
         }
         else {
-            console.error('emitResult', 'fail')
             this.fail++;
             if (!res.todo && !res.skip) {
                 this.ok = false;
