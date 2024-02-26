@@ -120,7 +120,7 @@ async function main() {
         }
         if (!tapEvent[1].ok) {
           summary.addHeading(`❌ ${stripPrefixes(tapEvent[1].name)}`, 4)
-          if (version === 13) {
+          if (version >= 13) {
             if (tapEvent[1].diag?.message) {
               extra += stripPrefixes(tapEvent[1].diag.message.trim()) + '\n'
             }
