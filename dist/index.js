@@ -24894,6 +24894,11 @@ async function main() {
                         if (tapEvent[1].diag?.stack) {
                             extra += stripPrefixes(tapEvent[1].diag.stack.trim()) + '\n';
                         }
+                        if (tapEvent[1].diag?.details && typeof tapEvent[1].diag?.details === 'object') {
+                            for (const [key, value] of Object.entries(tapEvent[1].diag.details)) {
+                                extra += `${key}: ${value}\n`;
+                            }
+                        }
                         for (const err of tapEvent[1].diag?.errors ?? []) {
                             if (err.errMsg) {
                                 extra += stripPrefixes(err.errMsg.trim()) + '\n';
